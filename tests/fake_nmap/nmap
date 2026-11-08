@@ -39,6 +39,9 @@ def main() -> int:
         if delay:
             time.sleep(delay)
     stream.flush()
+    hold = max(0.0, float(os.environ.get("NMAP_FAKE_HOLD_AFTER_OUTPUT", "0")))
+    if hold:
+        time.sleep(hold)
     return int(os.environ.get("NMAP_FAKE_EXIT_CODE", "0"))
 
 
