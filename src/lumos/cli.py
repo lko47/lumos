@@ -67,6 +67,9 @@ def _parser() -> argparse.ArgumentParser:
     xml_import.add_argument("--operator", default=None)
     xml_import.add_argument("--no-evidence", action="store_true")
 
+    tui = commands.add_parser("tui", help="open the interactive map (plain output when redirected)")
+    tui.add_argument("database", type=Path, help="engagement database")
+
     report = commands.add_parser("report", help="generate engagement reports")
     report_commands = report.add_subparsers(dest="report_format", required=True)
     markdown = report_commands.add_parser("markdown", help="write a Markdown report")
@@ -169,6 +172,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(parse_error, file=sys.stderr)
                 return 1
             return 0
+        if args.command == "tui":
+            from .tui.app import run_tui
+
+            return run_tui(args.database)
         if args.command == "report" and args.report_format == "markdown":
             write_markdown_report(args.database, args.output)
             print(f"Wrote Markdown report to {args.output}")

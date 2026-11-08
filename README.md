@@ -13,11 +13,11 @@ The project name is provisional. No game assets, names, or layouts are used.
 - Scan only authorized targets. Lumos checks targets against engagement-wide allow and exclude rules before starting Nmap. An out-of-scope override requires the exact displayed phrase and is recorded.
 - Nmap XML and imported databases are untrusted input. Protect engagement files with OS permissions, access controls, and disk encryption. Do not store credentials in notes or scan scripts.
 
-## Current status: Phase 2 headless core
+## Current status: Phase 3 in progress
 
-Implemented: schema-v1 database creation and checks; scope rules; Nmap version discovery, safe argument-vector execution, streamed XML parsing and persistence; exact-hostname allowlisting before Nmap-based hostname resolution; scan audit/provenance and compressed raw XML evidence; bounded Nmap XML import; and a Markdown report. The scan command displays the final Nmap command before execution. User-specified Nmap `-oN` and `-oG` output files are retained alongside Lumos's XML stream. An `-oX` or `-oA` manual option conflicts with XML-on-stdout and is rejected with an explanation.
+Implemented: schema-v1 database creation and checks; scope rules; Nmap version discovery, safe argument-vector execution, streamed XML parsing and persistence; exact-hostname allowlisting before Nmap-based hostname resolution; scan audit/provenance and compressed raw XML evidence; bounded Nmap XML import; Markdown report; and an initial bounded, read-only map/host TUI. `lumos tui DATABASE` opens curses on a terminal and prints an ASCII snapshot when output is redirected. The TUI supports keyboard node navigation, search, refresh, resize, `NO_COLOR`, host-list view, and edge provenance details. The scan command displays the final Nmap command before execution. User-specified Nmap `-oN` and `-oG` output files are retained alongside Lumos's XML stream. An `-oX` or `-oA` manual option conflicts with XML-on-stdout and is rejected with an explanation.
 
-The curses TUI, live topology canvas, graph layout, merge, scan profiles/queue, comparisons, notes editor, manual topology editing, sanitization, synthetic demo generator, HTML/SVG/CSV/JSON exports, plugins, and performance benchmarks are not implemented yet. Do not treat Phase 2 as a finished release.
+The TUI remains a prototype: it does not yet receive live scan events, discover scanner interfaces with `--iflist`, save positions, pan/zoom, render braille, support mouse interaction, or provide scan/review/notes panels. The full phase also still needs resize/color/SSH/tmux coverage and idle-CPU measurement. Merge, scan profiles/queue, comparisons, notes editor, manual topology editing, sanitization, synthetic demo generator, HTML/SVG/CSV/JSON exports, plugins, and performance benchmarks are not implemented. Do not treat Phase 3 as finished.
 
 Nmap progress flags are included only when the installed executable advertises them in its help output. The installed Nmap build used during development did not advertise `--stats-every`, so periodic Nmap progress may be unavailable on that build. Traceroute topology must not be inferred from the current default connect scan; Nmap documents that traceroute is incompatible with `-sT`.
 
@@ -33,6 +33,7 @@ PYTHONPATH=src python3 -m lumos scan ./engagement.sqlite 192.0.2.10 --network ex
 PYTHONPATH=src python3 -m lumos import ./engagement.sqlite ./saved-scan.xml --network example
 PYTHONPATH=src python3 -m lumos report markdown ./engagement.sqlite ./assessment.md
 PYTHONPATH=src python3 -m lumos db check ./engagement.sqlite
+PYTHONPATH=src python3 -m lumos tui ./engagement.sqlite
 ```
 
 `192.0.2.0/24` is documentation-only address space; replace it with an explicitly authorized target and scope. By default, the scan command displays its exact command and asks for interactive confirmation. In non-interactive use, `--yes` skips that prompt; review the target and options before using it in automation. For a target outside the allowlist, the CLI blocks the scan and prints the exact typed override phrase; use `--confirm-scope` only when authorized.
