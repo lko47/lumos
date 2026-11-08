@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+"""Offline Nmap stand-in: replay a selected XML fixture; never scans."""
+
+from __future__ import annotations
+
+import os
+import sys
+import time
+from pathlib import Path
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if "--version" in args or "-V" in args:
+        print("Nmap version 7.99 (synthetic test executable)")
+        return 0
+    if "-h" in args or "--help" in args:
+        print("Synthetic fake Nmap: set NMAP_FAKE_FIXTURE and request -oX -")
+        return 0
+    if not any(arg in ("-oX", "-oX-") for arg in args):
+        print("fake-nmap: test invocation must request XML output (-oX)", file=sys.stderr)
+        return 2
+    fixture_name = os.environ.get("NMAP_FAKE_FIXTURE")
+    if not fixture_name:
+        print("fake-nmap: NMAP_FAKE_FIXTURE is required", file=sys.stderr)
+        return 2
+    fixture = Path(fixture_name)
+    try:
+        payload = fixture.read_bytes()
+    except OSError as exc:
+        print(f"fake-nmap: cannot read fixture: {exc}", file=sys.stderr)
+        return 2
+    chunk_size = max(1, int(os.environ.get("NMAP_FAKE_CHUNK_SIZE", "4096")))
+    delay = max(0.0, float(os.environ.get("NMAP_FAKE_DELAY_SECONDS", "0")))
+    stream = sys.stdout.buffer
+    for offset in range(0, len(payload), chunk_size):
+        stream.write(payload[offset : offset + chunk_size])
+        stream.flush()
+        if delay:
+            time.sleep(delay)
+    stream.flush()
+    return int(os.environ.get("NMAP_FAKE_EXIT_CODE", "0"))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

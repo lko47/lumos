@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.build/
+dist/
+.tox/
+.venv/
+venv/
+
+# Engagement data and scan artifacts must never enter source control.
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+*.nmap
+*.xml
+/engagements/
+/generated-reports/
+!tests/fixtures/nmap/*.xml
+
+# Local/editor state.
+.idea/
+.vscode/
+.DS_Store

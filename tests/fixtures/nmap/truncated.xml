@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<nmaprun scanner="nmap" args="nmap -sV -oX - 192.0.2.20" start="1762600200" version="7.99" xmloutputversion="1.05">
+  <host starttime="1762600200">
+    <status state="up" reason="echo-reply"/>
+    <address addr="192.0.2.20" addrtype="ipv4"/>
+    <ports><port protocol="tcp" portid="8080"><state state="open"/><service name="unknown"/></port></ports>
