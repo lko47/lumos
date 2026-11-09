@@ -13,6 +13,7 @@ from typing import Any
 
 from ..core.text import sanitize_text
 from ..services.map_view import MapNode, MapSnapshot, MapSnapshotWatcher, load_map_snapshot, render_plain_snapshot
+from .braille import BrailleCanvas
 
 
 class TuiError(ValueError):
@@ -154,13 +155,25 @@ def _draw_map(window: Any, snapshot: MapSnapshot, selected: int, selected_kind: 
     canvas = [[" " for _ in range(canvas_width)] for _ in range(canvas_height)]
     positions = _ring_positions(snapshot.nodes, canvas_width, canvas_height)
     glyph_unicode = unicode_ok
-    for edge in snapshot.edges:
-        start = positions.get(edge.from_node_id)
-        end = positions.get(edge.to_node_id)
-        if start is None or end is None:
-            continue
-        glyphs = _EDGE_GLYPHS.get(edge.edge_type, ("-", "─"))
-        _raster_line(canvas, start, end, glyphs[1] if glyph_unicode else glyphs[0])
+    if glyph_unicode:
+        braille = BrailleCanvas(canvas_width, canvas_height)
+        for edge in snapshot.edges:
+            start = positions.get(edge.from_node_id)
+            end = positions.get(edge.to_node_id)
+            if start is None or end is None:
+                continue
+            start_dot = (start[0] * 2 + 1, start[1] * 4 + 2)
+            end_dot = (end[0] * 2 + 1, end[1] * 4 + 2)
+            braille.draw_line(start_dot, end_dot, style=edge.edge_type)
+        canvas = [list(row) for row in braille.render()]
+    else:
+        for edge in snapshot.edges:
+            start = positions.get(edge.from_node_id)
+            end = positions.get(edge.to_node_id)
+            if start is None or end is None:
+                continue
+            glyphs = _EDGE_GLYPHS.get(edge.edge_type, ("-", "─"))
+            _raster_line(canvas, start, end, glyphs[0])
     for row, line in enumerate(canvas):
         _safe_addstr(window, row + 2, 0, "".join(line), canvas_width, colors["edge"], unicode_ok=unicode_ok)
     selected_node = snapshot.nodes[selected] if selected_kind == "node" and 0 <= selected < len(snapshot.nodes) else None

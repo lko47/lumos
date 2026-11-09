@@ -20,12 +20,34 @@ from unittest.mock import patch
 from lumos.core.database import initialize_database
 from lumos.core.scanning import scan_database
 from lumos.core.scope_store import add_scope_rule
-from lumos.services.map_view import load_map_snapshot
-from lumos.tui.app import run_tui
+from lumos.services.map_view import MapEdge, MapNode, MapSnapshot, load_map_snapshot
+from lumos.tui.app import _draw_map, run_tui
 
 ROOT = Path(__file__).resolve().parents[1]
 FAKE = ROOT / "tests" / "fake_nmap" / "nmap"
 FIXTURE = ROOT / "tests" / "fixtures" / "nmap" / "normal.xml"
+
+
+class RecordingWindow:
+    def __init__(self, height: int = 14, width: int = 80) -> None:
+        self.height = height
+        self.width = width
+        self.writes: list[str] = []
+
+    def getmaxyx(self) -> tuple[int, int]:
+        return self.height, self.width
+
+    def erase(self) -> None:
+        self.writes.clear()
+
+    def addnstr(self, _y: int, _x: int, text: str, _width: int, _attr: int = 0) -> None:
+        self.writes.append(text)
+
+    def addch(self, _y: int, _x: int, char: str, _attr: int = 0) -> None:
+        self.writes.append(char)
+
+    def refresh(self) -> None:
+        pass
 
 
 class TuiTests(unittest.TestCase):
@@ -34,6 +56,23 @@ class TuiTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.db = Path(self.tmp.name) / "engagement.sqlite"
         initialize_database(self.db, "terminal smoke")
+
+    def test_map_uses_braille_for_unicode_and_keeps_ascii_fallback(self) -> None:
+        root = MapNode("root", "root", "Scanner", (), "", 0, 0, 0)
+        host = MapNode("host", "device", "Host", ("192.0.2.10",), "", 2, 0, 1)
+        edge = MapEdge("edge", "root", "host", "traceroute", "nmap_xml", "scan", 1.0, "now", "now", "tester")
+        snapshot = MapSnapshot("engagement", "test", 1, 0, 0, (root, host), (edge,))
+        colors = {name: 0 for name in ("header", "plain", "selected", "edge", "review", "device", "hop", "manual")}
+
+        unicode_window = RecordingWindow()
+        _draw_map(unicode_window, snapshot, 1, "node", True, colors)
+        unicode_text = "".join(unicode_window.writes)
+        self.assertTrue(any(0x2800 <= ord(char) <= 0x28FF for char in unicode_text))
+
+        ascii_window = RecordingWindow()
+        _draw_map(ascii_window, snapshot, 1, "node", False, colors)
+        ascii_text = "".join(ascii_window.writes)
+        self.assertTrue(ascii_text.isascii())
 
     def test_redirected_tui_uses_plain_text_fallback(self) -> None:
         output = io.StringIO()
@@ -161,6 +200,59 @@ class TuiTests(unittest.TestCase):
         finally:
             if scan_thread and scan_thread.is_alive():
                 scan_thread.join(timeout=8.0)
+            if pid > 0:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    os.waitpid(pid, 0)
+                except ChildProcessError:
+                    pass
+            os.close(master)
+
+    @unittest.skipUnless(os.name == "posix" and hasattr(pty, "fork"), "requires POSIX pseudo-terminals")
+    def test_pty_unicode_map_emits_braille_cells(self) -> None:
+        add_scope_rule(self.db, "lab", "192.0.2.0/24", included=True, author="test")
+        with patch.dict(os.environ, {"NMAP_FAKE_FIXTURE": str(FIXTURE)}):
+            scan_database(self.db, "lab", ["192.0.2.10"], executable=str(FAKE), operator="test")
+        pid, master = pty.fork()
+        if pid == 0:  # pragma: no cover - child process
+            env = os.environ.copy()
+            env.update({
+                "TERM": "xterm-256color",
+                "NO_COLOR": "1",
+                "LC_ALL": "C.UTF-8",
+                "PYTHONPATH": str(ROOT / "src") + os.pathsep + env.get("PYTHONPATH", ""),
+            })
+            env.pop("LUMOS_ASCII", None)
+            os.execve(sys.executable, [sys.executable, "-m", "lumos", "tui", str(self.db)], env)
+            os._exit(127)
+
+        output = bytearray()
+        exit_code = None
+        try:
+            fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 28, 100, 0, 0))
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline and b"\xe2\xa0" not in output:
+                ready, _, _ = select.select([master], [], [], 0.2)
+                if ready:
+                    try:
+                        output.extend(os.read(master, 8192))
+                    except OSError:
+                        break
+            self.assertIn(b"\xe2\xa0", output, f"no braille cells in curses output: {bytes(output[-1000:])!r}")
+            os.write(master, b"q")
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                waited, status = os.waitpid(pid, os.WNOHANG)
+                if waited:
+                    exit_code = os.waitstatus_to_exitcode(status)
+                    pid = -1
+                    break
+                time.sleep(0.05)
+            self.assertEqual(exit_code, 0)
+        finally:
             if pid > 0:
                 try:
                     os.kill(pid, signal.SIGKILL)
