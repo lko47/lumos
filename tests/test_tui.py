@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import termios
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -19,6 +20,7 @@ from unittest.mock import patch
 from lumos.core.database import initialize_database
 from lumos.core.scanning import scan_database
 from lumos.core.scope_store import add_scope_rule
+from lumos.services.map_view import load_map_snapshot
 from lumos.tui.app import run_tui
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,6 +59,120 @@ class TuiTests(unittest.TestCase):
         self.assertTrue(result.stdout.isascii())
 
     @unittest.skipUnless(os.name == "posix" and hasattr(pty, "fork"), "requires POSIX pseudo-terminals")
+    def test_pty_receives_live_scan_updates_without_blocking_navigation(self) -> None:
+        add_scope_rule(self.db, "lab", "192.0.2.0/24", included=True, author="test")
+        host_xml = "".join(
+            f'<host><status state="up" reason="syn-ack" reason_ttl="64"/>'
+            f'<address addr="192.0.2.{index}" addrtype="ipv4"/>'
+            f'<hostnames><hostname name="node-{index}.example.invalid" type="user"/></hostnames></host>'
+            for index in range(1, 52)
+        )
+        fixture = Path(self.tmp.name) / "live.xml"
+        fixture.write_text(
+            '<?xml version="1.0"?><nmaprun scanner="nmap" args="synthetic" version="7.99">'
+            + host_xml
+            + '<runstats><finished exit="success"/><hosts up="51" down="0" total="51"/></runstats></nmaprun>',
+            encoding="utf-8",
+        )
+        pid, master = pty.fork()
+        if pid == 0:  # pragma: no cover - child process
+            env = os.environ.copy()
+            env.update({
+                "TERM": "xterm-256color",
+                "NO_COLOR": "1",
+                "LUMOS_ASCII": "1",
+                "LC_ALL": "C.UTF-8",
+                "PYTHONPATH": str(ROOT / "src") + os.pathsep + env.get("PYTHONPATH", ""),
+            })
+            os.execve(sys.executable, [sys.executable, "-m", "lumos", "tui", str(self.db)], env)
+            os._exit(127)
+
+        output = bytearray()
+        exit_code = None
+        scan_thread = None
+        scan_errors: list[BaseException] = []
+        try:
+            fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 28, 100, 0, 0))
+
+            def read_until(needle: bytes, timeout: float = 6.0) -> bool:
+                if needle in output:
+                    return True
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline:
+                    ready, _, _ = select.select([master], [], [], 0.2)
+                    if not ready:
+                        continue
+                    try:
+                        chunk = os.read(master, 8192)
+                    except OSError:
+                        return False
+                    if not chunk:
+                        return False
+                    output.extend(chunk)
+                    if needle in output:
+                        return True
+                return False
+
+            self.assertTrue(read_until(b"nodes 1"), "initial empty map did not render")
+
+            def run_scan() -> None:
+                try:
+                    with patch.dict(os.environ, {
+                        "NMAP_FAKE_FIXTURE": str(fixture),
+                        "NMAP_FAKE_CHUNK_SIZE": "4096",
+                        "NMAP_FAKE_HOLD_AFTER_OUTPUT": "3",
+                    }):
+                        scan_database(self.db, "lab", ["192.0.2.10"], executable=str(FAKE), operator="test")
+                except BaseException as exc:
+                    scan_errors.append(exc)
+
+            scan_thread = threading.Thread(target=run_scan, name="test-live-scan")
+            scan_thread.start()
+            deadline = time.monotonic() + 6.0
+            live_snapshot = None
+            while time.monotonic() < deadline:
+                candidate = load_map_snapshot(self.db)
+                if candidate.active_scans == 1 and len(candidate.nodes) == 51:
+                    live_snapshot = candidate
+                    break
+                time.sleep(0.05)
+            self.assertIsNotNone(live_snapshot, "fake scan did not commit a 50-host batch while remaining active")
+            self.assertTrue(scan_thread.is_alive(), "fake scan finished before the live map update was observed")
+            time.sleep(1.1)  # allow the TUI's data_version watcher to publish the committed snapshot
+            fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 28, 101, 0, 0))
+            self.assertTrue(read_until(b"active 1"), f"TUI did not redraw active scan status: {bytes(output[-3000:])!r}")
+            self.assertTrue(read_until(b"nodes 51"), f"TUI did not display the committed host batch: {bytes(output[-3000:])!r}")
+            os.write(master, b"v")
+            self.assertTrue(read_until(b"HOSTS  |  terminal smoke"), "navigation was blocked while the scan was running")
+            os.write(master, b"q")
+            deadline = time.monotonic() + 5.0
+            while time.monotonic() < deadline:
+                waited, status = os.waitpid(pid, os.WNOHANG)
+                if waited:
+                    exit_code = os.waitstatus_to_exitcode(status)
+                    pid = -1
+                    break
+                time.sleep(0.05)
+            self.assertIsNotNone(exit_code, "TUI did not quit during the scan")
+            self.assertEqual(exit_code, 0)
+            scan_thread.join(timeout=8.0)
+            self.assertFalse(scan_thread.is_alive(), "fake scan thread did not finish")
+            self.assertFalse(scan_errors, f"fake scan failed: {scan_errors!r}")
+        finally:
+            if scan_thread and scan_thread.is_alive():
+                scan_thread.join(timeout=8.0)
+            if pid > 0:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    os.waitpid(pid, 0)
+                except ChildProcessError:
+                    pass
+            os.close(master)
+
+    @unittest.skipUnless(os.name == "posix" and hasattr(pty, "fork"), "requires POSIX pseudo-terminals")
     def test_pty_launch_navigation_and_clean_quit(self) -> None:
         add_scope_rule(self.db, "lab", "192.0.2.0/24", included=True, author="test")
         with patch.dict(os.environ, {"NMAP_FAKE_FIXTURE": str(FIXTURE)}):
@@ -80,6 +196,8 @@ class TuiTests(unittest.TestCase):
             fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 28, 100, 0, 0))
 
             def read_until(needle: bytes, timeout: float = 5.0) -> bool:
+                if needle in output:
+                    return True
                 deadline = time.monotonic() + timeout
                 while time.monotonic() < deadline:
                     ready, _, _ = select.select([master], [], [], 0.2)
@@ -99,7 +217,7 @@ class TuiTests(unittest.TestCase):
             self.assertTrue(read_until(b"LUMOS  MAP"), "initial map view did not render")
             os.write(master, b"e")
             self.assertTrue(read_until(b"EDGE DETAILS"), "e key did not select edge provenance details")
-            self.assertTrue(read_until(b"Confidence:"), "edge confidence was not rendered")
+            self.assertTrue(read_until(b"Confidence:"), f"edge confidence was not rendered; bytes={bytes(output[-1500:])!r}")
             os.write(master, b"v")
             self.assertTrue(read_until(b"HOSTS  |  terminal smoke"), f"v key did not open host list; terminal bytes: {bytes(output[-2000:])!r}")
             os.write(master, b"q")

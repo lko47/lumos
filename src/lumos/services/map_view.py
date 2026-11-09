@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import queue
+import threading
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +43,7 @@ class MapSnapshot:
     engagement_id: str
     engagement_name: str
     scans: int
+    active_scans: int
     review_items: int
     nodes: tuple[MapNode, ...]
     edges: tuple[MapEdge, ...]
@@ -179,6 +182,9 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
             for n in nodes
         ]
         scans = conn.execute("SELECT COUNT(*) FROM scans WHERE engagement_id = ?", (engagement_id,)).fetchone()[0]
+        active_scans = conn.execute(
+            "SELECT COUNT(*) FROM scans WHERE engagement_id = ? AND status = 'running'", (engagement_id,)
+        ).fetchone()[0]
         reviews = conn.execute(
             "SELECT COUNT(*) FROM review_items r WHERE r.engagement_id = ? AND "
             "(SELECT e.state FROM review_events e WHERE e.review_item_id = r.id "
@@ -189,6 +195,7 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
             engagement_id=str(engagement_id),
             engagement_name=sanitize_text(engagement_name, max_chars=512),
             scans=int(scans),
+            active_scans=int(active_scans),
             review_items=int(reviews),
             nodes=tuple(nodes),
             edges=tuple(edge for edge in edges if edge.from_node_id in node_ids and edge.to_node_id in node_ids),
@@ -197,11 +204,74 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
         conn.close()
 
 
+class MapSnapshotWatcher:
+    """Watch another database connection's commits and publish fresh snapshots."""
+
+    def __init__(self, database: str | Path, *, interval: float = 1.0):
+        if interval <= 0:
+            raise ValueError("watch interval must be positive")
+        self.database = Path(database)
+        self.interval = interval
+        self._stop = threading.Event()
+        self._updates: queue.Queue[MapSnapshot] = queue.Queue(maxsize=1)
+        self._error: BaseException | None = None
+        self._thread = threading.Thread(target=self._run, name="lumos-map-watcher", daemon=True)
+
+    @property
+    def error(self) -> BaseException | None:
+        return self._error
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread.is_alive():
+            self._thread.join(timeout=6.0)
+
+    def take_latest(self) -> MapSnapshot | None:
+        latest = None
+        while True:
+            try:
+                latest = self._updates.get_nowait()
+            except queue.Empty:
+                return latest
+
+    def _publish(self, snapshot: MapSnapshot) -> None:
+        try:
+            self._updates.put_nowait(snapshot)
+        except queue.Full:
+            try:
+                self._updates.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._updates.put_nowait(snapshot)
+            except queue.Full:
+                pass
+
+    def _run(self) -> None:
+        conn = None
+        try:
+            conn = open_database(self.database, readonly=True)
+            version = int(conn.execute("PRAGMA data_version").fetchone()[0])
+            while not self._stop.wait(self.interval):
+                current = int(conn.execute("PRAGMA data_version").fetchone()[0])
+                if current != version:
+                    version = current
+                    self._publish(load_map_snapshot(self.database))
+        except Exception as exc:
+            self._error = exc
+        finally:
+            if conn is not None:
+                conn.close()
+
+
 def render_plain_snapshot(snapshot: MapSnapshot) -> str:
     """Produce a stable non-interactive fallback without requiring a terminal."""
     lines = [
         f"Lumos - {sanitize_text(snapshot.engagement_name, max_chars=256)}",
-        f"Scans: {snapshot.scans} | Nodes: {len(snapshot.nodes)} | Review: {snapshot.review_items}",
+        f"Scans: {snapshot.scans} | Active: {snapshot.active_scans} | Nodes: {len(snapshot.nodes)} | Review: {snapshot.review_items}",
     ]
     for node in snapshot.nodes:
         addresses = ", ".join(node.addresses) if node.addresses else ""

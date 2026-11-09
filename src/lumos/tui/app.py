@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core.text import sanitize_text
-from ..services.map_view import MapNode, MapSnapshot, load_map_snapshot, render_plain_snapshot
+from ..services.map_view import MapNode, MapSnapshot, MapSnapshotWatcher, load_map_snapshot, render_plain_snapshot
 
 
 class TuiError(ValueError):
@@ -144,7 +144,7 @@ def _draw_map(window: Any, snapshot: MapSnapshot, selected: int, selected_kind: 
         _safe_addstr(window, 0, 0, "Terminal too small; resize to at least 32x6", width, curses.A_BOLD, unicode_ok=unicode_ok)
         window.refresh()
         return
-    title = f"LUMOS  MAP  |  {snapshot.engagement_name}  |  scans {snapshot.scans}  nodes {len(snapshot.nodes)}  review {snapshot.review_items}"
+    title = f"LUMOS  MAP  |  {snapshot.engagement_name}  |  scans {snapshot.scans} active {snapshot.active_scans}  nodes {len(snapshot.nodes)}  review {snapshot.review_items}"
     _safe_addstr(window, 0, 0, title, width, colors["header"], unicode_ok=unicode_ok)
     _safe_addstr(window, 1, 0, "[Map:m]  [Hosts:v]  ? Help", width, colors["plain"], unicode_ok=unicode_ok)
 
@@ -282,21 +282,44 @@ def _run_curses(window: Any, database: Path) -> None:
         pass
     colors = _init_colors()
     unicode_ok = _unicode_enabled()
-    window.timeout(-1)
+    window.timeout(1000)
+    watcher = MapSnapshotWatcher(database, interval=1.0)
+    watcher.start()
+    try:
+        _run_event_loop(window, database, watcher, unicode_ok, colors)
+    finally:
+        watcher.stop()
+
+
+def _run_event_loop(window: Any, database: Path, watcher: MapSnapshotWatcher, unicode_ok: bool, colors: dict[str, int]) -> None:
     snapshot = load_map_snapshot(database)
     selected = 0
     selected_kind = "node"
     view = "map"
     help_screen = False
+    dirty = True
     while True:
         if help_screen:
             _show_help(window, unicode_ok, colors)
             help_screen = False
-        if view == "map":
-            _draw_map(window, snapshot, selected, selected_kind, unicode_ok, colors)
-        else:
-            _draw_hosts(window, snapshot, selected, unicode_ok, colors)
+        if dirty:
+            if view == "map":
+                _draw_map(window, snapshot, selected, selected_kind, unicode_ok, colors)
+            else:
+                _draw_hosts(window, snapshot, selected, unicode_ok, colors)
+            dirty = False
         key = window.getch()
+        updated = watcher.take_latest()
+        if updated is not None:
+            snapshot = updated
+            if selected_kind == "edge" and not snapshot.edges:
+                selected_kind = "node"
+            item_count = len(snapshot.edges) if selected_kind == "edge" else len(snapshot.nodes)
+            selected = min(selected, max(0, item_count - 1))
+            dirty = True
+        if key == -1:
+            continue
+        dirty = True
         if key in (ord("q"), 27):
             return
         if key == curses.KEY_RESIZE:

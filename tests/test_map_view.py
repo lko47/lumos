@@ -45,6 +45,7 @@ class MapSnapshotTests(unittest.TestCase):
             scan_database(self.db, "lab", ["192.0.2.10"], executable=str(FAKE), operator="test")
         snapshot = load_map_snapshot(self.db)
         node_ids = {node.id for node in snapshot.nodes}
+        self.assertEqual(snapshot.active_scans, 0)
         self.assertGreaterEqual(sum(node.kind == "root" for node in snapshot.nodes), 1)
         self.assertTrue(any(node.kind == "device" for node in snapshot.nodes))
         self.assertTrue(any(node.kind in {"hop", "unknown_hop"} for node in snapshot.nodes))
