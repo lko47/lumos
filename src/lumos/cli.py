@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shlex
 import sqlite3
 import sys
+from dataclasses import asdict
 from pathlib import Path
 from typing import Sequence
 
 from . import __version__
 from .core.database import DatabaseError, check_database, initialize_database, open_database
+from .core.nmap.iflist import discover_interfaces
 from .core.nmap.runner import NmapRunnerError
 from .core.reports import write_markdown_report
 from .core.scanning import ScopeConfirmationRequired, scan_database
@@ -47,6 +50,12 @@ def _parser() -> argparse.ArgumentParser:
     scope_add.add_argument("--author", default="")
     scope_show = scope_commands.add_parser("show", help="list scope rules")
     scope_show.add_argument("database", type=Path)
+
+    interfaces = commands.add_parser(
+        "interfaces", help="show scanner interfaces and routes from Nmap --iflist"
+    )
+    interfaces.add_argument("--nmap", dest="nmap_executable", help="explicit Nmap executable path")
+    interfaces.add_argument("--json", action="store_true", help="print structured JSON")
 
     scan = commands.add_parser("scan", help="run a scope-checked scan using the installed Nmap")
     scan.add_argument("database", type=Path)
@@ -111,6 +120,42 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     try:
+        if args.command == "interfaces":
+            snapshot = discover_interfaces(args.nmap_executable)
+            if args.json:
+                print(
+                    json.dumps(
+                        {
+                            "interfaces": [asdict(item) for item in snapshot.interfaces],
+                            "routes": [asdict(item) for item in snapshot.routes],
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        indent=2,
+                    )
+                )
+            else:
+                print("Interfaces:")
+                if not snapshot.interfaces:
+                    print("  (none)")
+                for item in snapshot.interfaces:
+                    state = "up" if item.is_up else "down"
+                    address = item.address or "no address"
+                    mac = f"; MAC {item.mac}" if item.mac else ""
+                    print(
+                        f"  {item.name} ({item.short_name}) {item.interface_type} {state}; "
+                        f"MTU {item.mtu}; {address}{mac}"
+                    )
+                print("Routes:")
+                if not snapshot.routes:
+                    print("  (none)")
+                for item in snapshot.routes:
+                    gateway = f" via {item.gateway}" if item.gateway else ""
+                    print(
+                        f"  {item.destination} dev {item.device}{gateway} "
+                        f"(metric {item.metric})"
+                    )
+            return 0
         if args.command == "db" and args.db_command == "init":
             engagement_id = initialize_database(args.path, args.name)
             print(AUTHORIZED_USE_NOTICE, file=sys.stderr)
