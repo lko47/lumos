@@ -78,6 +78,10 @@ class BrailleCanvas:
                 y0 += sy
             step += 1
 
+    def masks(self) -> tuple[tuple[int, ...], ...]:
+        """Return the raw dot mask per terminal cell (0 when untouched)."""
+        return tuple(tuple(row) for row in self._cells)
+
     def render(self) -> tuple[str, ...]:
         """Return one Unicode braille character per terminal cell."""
         return tuple(

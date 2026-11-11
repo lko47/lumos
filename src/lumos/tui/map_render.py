@@ -1,0 +1,336 @@
+"""Topology canvas rendering: braille edges, node labels, detail sidebar."""
+
+from __future__ import annotations
+
+from typing import Any, Iterable
+
+from ..services.map_view import MapSnapshot
+from .braille import BrailleCanvas
+from .layout import compute_layout
+from .widgets import (
+    clip,
+    display_width,
+    draw_box,
+    draw_meter,
+    label_value,
+    safe_addstr,
+    short_time,
+    status_icon,
+)
+
+
+_KIND_GLYPHS = {
+    "root": ("@", "◆"),
+    "device": ("o", "●"),
+    "hop": ("+", "○"),
+    "unknown_hop": ("?", "◌"),
+    "manual": ("M", "▣"),
+    "zone": ("Z", "▧"),
+}
+
+_EDGE_GLYPHS = {
+    "traceroute": ("-", "─"),
+    "alternate": ("=", "═"),
+    "inferred": (".", "┄"),
+    "manual": ("#", "╳"),
+    "imported": ("~", "┈"),
+}
+
+_EDGE_PRIORITY = ("traceroute", "alternate", "manual", "imported", "inferred")
+
+
+def _attr(styles: dict[str, int], name: str, default: int = 0) -> int:
+    return styles.get(name, default)
+
+
+def _raster_line(canvas: list[list[str]], start: tuple[int, int], end: tuple[int, int], glyph: str) -> None:
+    x0, y0 = start
+    x1, y1 = end
+    dx, sx = abs(x1 - x0), 1 if x0 < x1 else -1
+    dy, sy = -abs(y1 - y0), 1 if y0 < y1 else -1
+    error = dx + dy
+    while True:
+        if 0 <= y0 < len(canvas) and 0 <= x0 < len(canvas[0]) and canvas[y0][x0] == " ":
+            if glyph in {".", "·", "#", "╳", "~", "┄", "┈"}:
+                canvas[y0][x0] = glyph
+            elif dx == 0:
+                canvas[y0][x0] = "|"
+            elif dy == 0:
+                canvas[y0][x0] = glyph
+            else:
+                canvas[y0][x0] = "/" if (x1 - start[0]) * (y1 - start[1]) < 0 else "\\"
+        if x0 == x1 and y0 == y1:
+            break
+        twice = 2 * error
+        if twice >= dy:
+            error += dy
+            x0 += sx
+        if twice <= dx:
+            error += dx
+            y0 += sy
+
+
+def _segment_visible(a: tuple[int, int], b: tuple[int, int], width: int, height: int) -> bool:
+    return not (
+        (a[0] < -2 and b[0] < -2) or (a[0] > width + 2 and b[0] > width + 2)
+        or (a[1] < -2 and b[1] < -2) or (a[1] > height + 2 and b[1] > height + 2)
+    )
+
+
+def _braille_runs(
+    layers: dict[str, BrailleCanvas], width: int, height: int
+) -> list[list[tuple[int, str, str]]]:
+    """Composite overlapping braille layers into coloured per-row runs."""
+    masks = {name: canvas.masks() for name, canvas in layers.items()}
+    rows: list[list[tuple[int, str, str]]] = []
+    for y in range(height):
+        runs: list[tuple[int, str, str]] = []
+        current_style: str | None = None
+        current_text = ""
+        current_x = 0
+        for x in range(width):
+            mask = 0
+            style = "traceroute"
+            for edge_type in _EDGE_PRIORITY:
+                layer = masks.get(edge_type)
+                if layer is not None and y < len(layer) and x < len(layer[y]) and layer[y][x]:
+                    mask = layer[y][x]
+                    style = edge_type
+                    break
+            char = chr(0x2800 + mask) if mask else " "
+            if style != current_style and current_text:
+                runs.append((current_x, current_text, current_style or "traceroute"))
+                current_text = ""
+            if not current_text:
+                current_x = x
+                current_style = style
+            current_text += char
+        if current_text:
+            runs.append((current_x, current_text, current_style or "traceroute"))
+        rows.append(runs)
+    return rows
+
+
+def _ascii_runs(
+    layers: dict[str, list[list[str]]], width: int, height: int
+) -> list[list[tuple[int, str, str]]]:
+    rows: list[list[tuple[int, str, str]]] = []
+    for y in range(height):
+        runs: list[tuple[int, str, str]] = []
+        current_style: str | None = None
+        current_text = ""
+        current_x = 0
+        for x in range(width):
+            char = " "
+            style = "traceroute"
+            for edge_type in _EDGE_PRIORITY:
+                layer = layers.get(edge_type)
+                if layer is not None and y < len(layer) and x < len(layer[y]) and layer[y][x] != " ":
+                    char = layer[y][x]
+                    style = edge_type
+                    break
+            if style != current_style and current_text:
+                runs.append((current_x, current_text, current_style or "traceroute"))
+                current_text = ""
+            if not current_text:
+                current_x = x
+                current_style = style
+            current_text += char
+        if current_text:
+            runs.append((current_x, current_text, current_style or "traceroute"))
+        rows.append(runs)
+    return rows
+
+
+def draw_map_panel(
+    window: Any,
+    snapshot: MapSnapshot,
+    state: Any,
+    styles: dict[str, int],
+    unicode_ok: bool,
+    top: int,
+    left: int,
+    height: int,
+    width: int,
+) -> tuple[dict[str, tuple[int, int]], tuple[int, int, int, int]]:
+    itop, ileft, ih, iw = draw_box(
+        window, top, left, height, width,
+        title=f"TOPOLOGY  {len(snapshot.nodes)} nodes  {len(snapshot.edges)} links",
+        border_attr=_attr(styles, "border_focus"),
+        title_attr=_attr(styles, "title"),
+        unicode_ok=unicode_ok,
+        focused=True,
+    )
+    if ih < 2 or iw < 4:
+        return {}, (itop, ileft, ih, iw)
+    positions = compute_layout(snapshot.nodes, iw, ih)
+    projected = {node_id: state.viewport.project(point, iw, ih) for node_id, point in positions.items()}
+
+    if unicode_ok:
+        layers: dict[str, BrailleCanvas] = {}
+        for edge in snapshot.edges:
+            start = projected.get(edge.from_node_id)
+            end = projected.get(edge.to_node_id)
+            if start is None or end is None or not _segment_visible(start, end, iw, ih):
+                continue
+            canvas = layers.setdefault(edge.edge_type, BrailleCanvas(iw, ih))
+            canvas.draw_line((start[0] * 2 + 1, start[1] * 4 + 2),
+                             (end[0] * 2 + 1, end[1] * 4 + 2), style=edge.edge_type)
+        runs = _braille_runs(layers, iw, ih)
+    else:
+        grids: dict[str, list[list[str]]] = {}
+        for edge in snapshot.edges:
+            start = projected.get(edge.from_node_id)
+            end = projected.get(edge.to_node_id)
+            if start is None or end is None or not _segment_visible(start, end, iw, ih):
+                continue
+            grid = grids.setdefault(edge.edge_type, [[" " for _ in range(iw)] for _ in range(ih)])
+            _raster_line(grid, start, end, _EDGE_GLYPHS.get(edge.edge_type, ("-", "─"))[0])
+        runs = _ascii_runs(grids, iw, ih)
+
+    for row, row_runs in enumerate(runs):
+        for x, text, edge_type in row_runs:
+            if not text.strip():
+                continue
+            safe_addstr(window, itop + row, ileft + x, text, max(1, iw - x),
+                        _attr(styles, f"edge_{edge_type}"), unicode_ok=unicode_ok)
+
+    selected_node = snapshot.nodes[state.selected] if (
+        state.selected_kind == "node" and 0 <= state.selected < len(snapshot.nodes)
+    ) else None
+    for index, node in enumerate(snapshot.nodes):
+        point = projected.get(node.id)
+        if point is None or not (0 <= point[0] < iw and 0 <= point[1] < ih):
+            continue
+        marker = _KIND_GLYPHS.get(node.kind, ("?", "?"))[1 if unicode_ok else 0]
+        selected = selected_node is not None and index == state.selected
+        prefix = "▶" if selected and unicode_ok else ">" if selected else " "
+        label = clip(node.label, max(4, min(22, iw - 4)), unicode_ok=unicode_ok)
+        text = f"{prefix}{marker} {label}"
+        x = max(0, min(iw - 1, point[0] - len(text) // 2))
+        style_name = "selected" if selected else (
+            "root" if node.kind == "root" else
+            "device" if node.kind == "device" else
+            "unknown_hop" if node.kind == "unknown_hop" else
+            "manual" if node.kind == "manual" else
+            "zone" if node.kind == "zone" else "hop"
+        )
+        safe_addstr(window, itop + point[1], ileft + x, clip(text, iw - x), iw - x,
+                    _attr(styles, style_name), unicode_ok=unicode_ok)
+        if node.review_count and point[0] + 1 < iw:
+            safe_addstr(window, itop + point[1], ileft + min(iw - 1, point[0] + 1), "!",
+                        1, _attr(styles, "error"), unicode_ok=unicode_ok)
+    if not snapshot.nodes:
+        safe_addstr(window, itop, ileft, "No nodes yet — run a scan with the CLI.", iw,
+                    _attr(styles, "muted"), unicode_ok=unicode_ok)
+    return projected, (itop, ileft, ih, iw)
+
+
+def _wrap_ports(ports: Iterable[str], width: int) -> list[str]:
+    out: list[str] = []
+    current = ""
+    for port in ports:
+        candidate = f"{current} {port}".strip()
+        if display_width(candidate) > width - 1 and current:
+            out.append(current)
+            current = port
+        else:
+            current = candidate
+    if current:
+        out.append(current)
+    return out
+
+
+def draw_sidebar(
+    window: Any,
+    snapshot: MapSnapshot,
+    state: Any,
+    styles: dict[str, int],
+    unicode_ok: bool,
+    top: int,
+    left: int,
+    height: int,
+    width: int,
+) -> None:
+    title = "SELECTED"
+    if state.selected_kind == "edge":
+        title = "EDGE"
+    elif 0 <= state.selected < len(snapshot.nodes) and snapshot.nodes[state.selected].kind == "root":
+        title = "SCANNER ROOT"
+    itop, ileft, ih, iw = draw_box(
+        window, top, left, height, width, title=f" {title} ",
+        border_attr=_attr(styles, "border"), title_attr=_attr(styles, "accent"),
+        unicode_ok=unicode_ok,
+    )
+    if ih < 2 or iw < 4:
+        return
+    sep = "│" if unicode_ok else "|"
+
+    def line(row: int, text: str, style: str = "label") -> None:
+        if 0 <= row < ih:
+            safe_addstr(window, itop + row, ileft, clip(text, iw), iw, _attr(styles, style),
+                        unicode_ok=unicode_ok)
+
+    def field(row: int, label: str, value: str, style: str = "value") -> None:
+        if 0 <= row < ih:
+            label_value(window, itop + row, ileft, iw, label, value, styles,
+                        value_style=style, unicode_ok=unicode_ok)
+
+    if state.selected_kind == "edge" and 0 <= state.selected < len(snapshot.edges):
+        edge = snapshot.edges[state.selected]
+        by_id = {node.id: node for node in snapshot.nodes}
+        source = by_id.get(edge.from_node_id)
+        destination = by_id.get(edge.to_node_id)
+        field(0, "type", edge.edge_type, "accent")
+        field(1, "from", source.label if source else edge.from_node_id)
+        field(2, "to", destination.label if destination else edge.to_node_id)
+        line(4, f"{sep} confidence", "muted")
+        draw_meter(window, itop + 5, ileft, iw, edge.confidence, styles,
+                   unicode_ok=unicode_ok, empty_attr=_attr(styles, "muted"))
+        line(6, f"{edge.confidence:.2f}", "value")
+        field(8, "source", edge.source_kind)
+        field(9, "source id", edge.source_id or "—")
+        field(11, "first seen", short_time(edge.first_observed_at))
+        field(12, "confirmed", short_time(edge.last_confirmed_at) if edge.last_confirmed_at else "not confirmed")
+        field(14, "author", edge.author or "—")
+        return
+
+    node = snapshot.nodes[state.selected] if 0 <= state.selected < len(snapshot.nodes) else None
+    if node is None:
+        line(0, "No selection", "muted")
+        return
+    line(0, f"{status_icon(node.kind, unicode_ok)} {node.kind.upper()}", "accent")
+    line(1, node.label, "value")
+    row = 3
+    line(row, f"{sep} addresses", "muted")
+    row += 1
+    for address in node.addresses[:3] or ("—",):
+        line(row, address, "label")
+        row += 1
+    if node.os_name:
+        field(row, "os", node.os_name)
+        row += 1
+    if node.kind == "root":
+        line(row + 1, f"{sep} vantage", "muted")
+        row += 2
+        for interface in snapshot.root_interfaces[:6] or ("not saved — lumos interfaces --save",):
+            line(row, interface, "label")
+            row += 1
+        field(row + 1, "scans", str(snapshot.scans))
+        field(row + 2, "active", str(snapshot.active_scans),
+              "scan_running" if snapshot.active_scans else "value")
+        return
+    line(row + 1, f"{sep} open ports  {node.open_ports}", "muted")
+    draw_meter(window, itop + row + 2, ileft, iw, min(1.0, node.open_ports / 20.0), styles,
+               unicode_ok=unicode_ok, empty_attr=_attr(styles, "muted"))
+    row += 3
+    if node.ports:
+        for ports in _wrap_ports(node.ports, iw)[:6]:
+            line(row, ports, "port_open")
+            row += 1
+    else:
+        line(row, "no open ports recorded", "muted")
+        row += 1
+    if node.review_count:
+        field(row + 1, "review", f"{node.review_count} flag(s)", "error")
+    field(row + 2, "hops", str(node.distance))

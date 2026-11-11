@@ -4,287 +4,257 @@ from __future__ import annotations
 
 import curses
 import locale
-import math
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 from ..core.text import sanitize_text
-from ..services.map_view import MapNode, MapSnapshot, MapSnapshotWatcher, load_map_snapshot, render_plain_snapshot
-from .braille import BrailleCanvas
+from ..services.map_view import MapSnapshot, MapSnapshotWatcher, load_map_snapshot, render_plain_snapshot
+from . import theme
+from .overlays import draw_help, draw_palette
+from .render import (
+    ViewState,
+    draw_footer,
+    draw_header,
+    draw_hosts_screen,
+    draw_map_screen,
+    draw_scans_screen,
+)
+from .render import draw_map as _draw_map
+from .widgets import safe_addstr
+
+MIN_HEIGHT = 8
+MIN_WIDTH = 40
+VIEWS = ("map", "hosts", "scans")
+
+_COMMANDS: tuple[tuple[str, str, str], ...] = (
+    ("map", "show the topology map", "map"),
+    ("hosts", "browse host rows", "hosts"),
+    ("scans", "scan status history", "scans"),
+    ("edges", "select the first observed link", "edges"),
+    ("root", "jump to the scanner root", "root"),
+    ("refresh", "reload the database snapshot", "refresh"),
+    ("theme", "cycle the colour theme", "theme"),
+    ("reset", "reset pan and zoom", "reset"),
+    ("help", "keyboard reference", "help"),
+    ("quit", "restore the terminal and exit", "quit"),
+)
 
 
 class TuiError(ValueError):
     """The terminal interface could not be initialized."""
 
 
-_KIND_GLYPHS = {
-    "root": ("@", "◆"),
-    "device": ("o", "●"),
-    "hop": ("+", "○"),
-    "unknown_hop": ("?", "?"),
-    "manual": ("M", "▣"),
-    "zone": ("Z", "▧"),
-}
-
-_EDGE_GLYPHS = {
-    "traceroute": ("-", "─"),
-    "alternate": ("=", "═"),
-    "inferred": (".", "┄"),
-    "manual": ("#", "╳"),
-    "imported": ("~", "┈"),
-}
-
-
 def _unicode_enabled() -> bool:
     if os.environ.get("LUMOS_ASCII"):
         return False
-    encoding = sys.stdout.encoding or locale.getpreferredencoding(False)
-    return "utf" in encoding.lower()
+    try:
+        encoding = sys.stdout.encoding or locale.getpreferredencoding(False)
+    except (AttributeError, ValueError):
+        return False
+    return "utf" in (encoding or "").lower()
 
 
-def _safe_addstr(window: Any, y: int, x: int, text: str, width: int, attr: int = 0, *, unicode_ok: bool = True) -> None:
-    if width <= 0:
+def _initial_theme(capability: str) -> str:
+    if capability == theme.CAPABILITY_MONO:
+        return "mono"
+    requested = os.environ.get("LUMOS_THEME", "").strip().lower()
+    return requested if requested in theme.THEMES else "aurora"
+
+
+def _cycle_theme(current: str, capability: str) -> str:
+    if capability == theme.CAPABILITY_MONO:
+        return current
+    return theme.next_theme(current)
+
+
+def _set_view(state: ViewState, view: str) -> None:
+    state.view = view if view in VIEWS else "map"
+    if state.view in {"hosts", "scans"}:
+        state.selected_kind = "node"
+
+
+def _clamp_selection(state: ViewState, snapshot: MapSnapshot) -> None:
+    if state.view == "scans":
+        state.scan_selected = max(0, min(state.scan_selected, max(0, len(snapshot.scans_detail) - 1)))
         return
-    text = sanitize_text(text, max_chars=max(width * 4, 64))
-    if not unicode_ok:
-        text = text.encode("ascii", "replace").decode("ascii")
-    try:
-        window.addnstr(y, x, text, width, attr)
-    except (curses.error, UnicodeEncodeError):
-        try:
-            fallback = text.encode("ascii", "replace").decode("ascii")
-            window.addnstr(y, x, fallback, width, attr)
-        except curses.error:
-            pass
+    if state.selected_kind == "edge" and not snapshot.edges:
+        state.selected_kind = "node"
+    count = len(snapshot.edges) if state.selected_kind == "edge" else len(snapshot.nodes)
+    state.selected = max(0, min(state.selected, max(0, count - 1)))
 
 
-def _init_colors() -> dict[str, int]:
-    if "NO_COLOR" in os.environ or not curses.has_colors():
-        return {"plain": 0, "header": curses.A_BOLD, "selected": curses.A_REVERSE, "edge": 0, "review": curses.A_BOLD}
-    try:
-        curses.start_color()
-        colors = curses.COLORS
-        palette = (
-            (39, 201, 46, 226, 196, 33)
-            if colors >= 256
-            else (curses.COLOR_CYAN, curses.COLOR_MAGENTA, curses.COLOR_GREEN,
-                  curses.COLOR_YELLOW, curses.COLOR_RED, curses.COLOR_BLUE)
-        )
-        for pair, color in enumerate(palette, start=1):
-            curses.init_pair(pair, color, -1)
-        return {
-            "plain": 0,
-            "header": curses.color_pair(1) | curses.A_BOLD,
-            "selected": curses.color_pair(2) | curses.A_BOLD,
-            "edge": curses.color_pair(6),
-            "review": curses.color_pair(4) | curses.A_BOLD,
-            "device": curses.color_pair(3),
-            "hop": curses.color_pair(6),
-            "manual": curses.color_pair(2),
-        }
-    except curses.error:
-        return {"plain": 0, "header": curses.A_BOLD, "selected": curses.A_REVERSE, "edge": 0, "review": curses.A_BOLD}
+def _move_selection(state: ViewState, snapshot: MapSnapshot, delta: int) -> None:
+    if state.view == "scans":
+        state.scan_selected = max(0, min(state.scan_selected + delta, max(0, len(snapshot.scans_detail) - 1)))
+        return
+    count = len(snapshot.edges) if state.selected_kind == "edge" else len(snapshot.nodes)
+    state.selected = max(0, min(state.selected + delta, max(0, count - 1)))
 
 
-def _ring_positions(nodes: tuple[MapNode, ...], width: int, height: int) -> dict[str, tuple[int, int]]:
-    if not nodes or width < 4 or height < 3:
-        return {}
-    root = next((node for node in nodes if node.kind == "root"), nodes[0])
-    cx, cy = width // 2, height // 2
-    positions = {root.id: (cx, cy)}
-    remaining = [node for node in nodes if node.id != root.id]
-    groups: dict[int, list[MapNode]] = {}
-    for node in remaining:
-        groups.setdefault(max(1, node.distance), []).append(node)
-    max_distance = max(groups, default=1)
-    radius = max(1, min(width // 2 - 2, height // 2 - 2))
-    for distance, group in sorted(groups.items()):
-        ring = max(2, int(radius * distance / (max_distance + 1)))
-        for index, node in enumerate(group):
-            angle = (2.0 * math.pi * index / max(1, len(group))) - math.pi / 2.0
-            x = max(1, min(width - 2, cx + round(math.cos(angle) * ring * 1.8)))
-            y = max(1, min(height - 2, cy + round(math.sin(angle) * ring)))
-            positions[node.id] = (x, y)
-    return positions
+def _jump_selection(state: ViewState, snapshot: MapSnapshot, *, last: bool) -> None:
+    if state.view == "scans":
+        state.scan_selected = max(0, len(snapshot.scans_detail) - 1) if last else 0
+        return
+    count = len(snapshot.edges) if state.selected_kind == "edge" else len(snapshot.nodes)
+    state.selected = max(0, count - 1) if last else 0
 
 
-def _raster_line(canvas: list[list[str]], start: tuple[int, int], end: tuple[int, int], glyph: str) -> None:
-    x0, y0 = start
-    x1, y1 = end
-    dx, sx = abs(x1 - x0), 1 if x0 < x1 else -1
-    dy, sy = -abs(y1 - y0), 1 if y0 < y1 else -1
-    error = dx + dy
-    while True:
-        if 0 <= y0 < len(canvas) and 0 <= x0 < len(canvas[0]) and canvas[y0][x0] == " ":
-            if glyph in {".", "·", "#", "╳", "~", "┄", "┈"}:
-                canvas[y0][x0] = glyph
-            elif dx == 0:
-                canvas[y0][x0] = "|" if glyph.isascii() else "│"
-            elif dy == 0:
-                canvas[y0][x0] = glyph
-            else:
-                canvas[y0][x0] = "/" if (x1 - start[0]) * (y1 - start[1]) < 0 else "\\"
-        if x0 == x1 and y0 == y1:
-            break
-        twice = 2 * error
-        if twice >= dy:
-            error += dy
-            x0 += sx
-        if twice <= dx:
-            error += dx
-            y0 += sy
+def _select_root(state: ViewState, snapshot: MapSnapshot) -> None:
+    state.selected_kind = "node"
+    state.selected = next((index for index, node in enumerate(snapshot.nodes) if node.kind == "root"), 0)
+    _set_view(state, "map")
 
 
-def _draw_map(window: Any, snapshot: MapSnapshot, selected: int, selected_kind: str, unicode_ok: bool, colors: dict[str, int]) -> None:
+def _select_edges(state: ViewState, snapshot: MapSnapshot) -> None:
+    if not snapshot.edges:
+        state.notify("No observed links recorded for this engagement")
+        return
+    state.selected_kind = "edge"
+    state.selected = min(state.selected, len(snapshot.edges) - 1)
+    _set_view(state, "map")
+
+
+def _search(snapshot: MapSnapshot, query: str) -> int | None:
+    needle = sanitize_text(query, max_chars=128).strip().lower()
+    if not needle:
+        return None
+    for index, node in enumerate(snapshot.nodes):
+        if needle in node.label.lower() or any(needle in address.lower() for address in node.addresses):
+            return index
+    return None
+
+
+def _draw_frame(
+    window: Any,
+    snapshot: MapSnapshot,
+    state: ViewState,
+    styles: dict[str, int],
+    unicode_ok: bool,
+    theme_name: str,
+    capability: str,
+) -> None:
     height, width = window.getmaxyx()
     window.erase()
-    if height < 6 or width < 32:
-        _safe_addstr(window, 0, 0, "Terminal too small; resize to at least 32x6", width, curses.A_BOLD, unicode_ok=unicode_ok)
+    if height < MIN_HEIGHT or width < MIN_WIDTH:
+        safe_addstr(
+            window,
+            0,
+            0,
+            f"Terminal too small; resize to at least {MIN_WIDTH}x{MIN_HEIGHT}",
+            width,
+            styles.get("error", 0),
+            unicode_ok=unicode_ok,
+        )
         window.refresh()
         return
-    title = f"LUMOS  MAP  |  {snapshot.engagement_name}  |  scans {snapshot.scans} active {snapshot.active_scans}  nodes {len(snapshot.nodes)}  review {snapshot.review_items}"
-    _safe_addstr(window, 0, 0, title, width, colors["header"], unicode_ok=unicode_ok)
-    _safe_addstr(window, 1, 0, "[Map:m]  [Hosts:v]  ? Help", width, colors["plain"], unicode_ok=unicode_ok)
-
-    details_width = min(34, max(12, width // 3))
-    canvas_width = max(8, width - details_width - 4)
-    canvas_height = height - 4
-    canvas = [[" " for _ in range(canvas_width)] for _ in range(canvas_height)]
-    positions = _ring_positions(snapshot.nodes, canvas_width, canvas_height)
-    glyph_unicode = unicode_ok
-    if glyph_unicode:
-        braille = BrailleCanvas(canvas_width, canvas_height)
-        for edge in snapshot.edges:
-            start = positions.get(edge.from_node_id)
-            end = positions.get(edge.to_node_id)
-            if start is None or end is None:
-                continue
-            start_dot = (start[0] * 2 + 1, start[1] * 4 + 2)
-            end_dot = (end[0] * 2 + 1, end[1] * 4 + 2)
-            braille.draw_line(start_dot, end_dot, style=edge.edge_type)
-        canvas = [list(row) for row in braille.render()]
+    draw_header(window, snapshot, state, styles, unicode_ok, theme_name, capability)
+    if state.view == "hosts":
+        draw_hosts_screen(window, snapshot, state, styles, unicode_ok)
+    elif state.view == "scans":
+        draw_scans_screen(window, snapshot, state, styles, unicode_ok)
     else:
-        for edge in snapshot.edges:
-            start = positions.get(edge.from_node_id)
-            end = positions.get(edge.to_node_id)
-            if start is None or end is None:
-                continue
-            glyphs = _EDGE_GLYPHS.get(edge.edge_type, ("-", "─"))
-            _raster_line(canvas, start, end, glyphs[0])
-    for row, line in enumerate(canvas):
-        _safe_addstr(window, row + 2, 0, "".join(line), canvas_width, colors["edge"], unicode_ok=unicode_ok)
-    selected_node = snapshot.nodes[selected] if selected_kind == "node" and 0 <= selected < len(snapshot.nodes) else None
-    selected_edge = snapshot.edges[selected] if selected_kind == "edge" and 0 <= selected < len(snapshot.edges) else None
-    for index, node in enumerate(snapshot.nodes):
-        point = positions.get(node.id)
-        if point is None:
-            continue
-        x, y = point
-        marker = _KIND_GLYPHS.get(node.kind, ("?", "?"))[1 if glyph_unicode else 0]
-        prefix = ">" if selected_node is not None and index == selected else " "
-        label = sanitize_text(node.label, max_chars=80)
-        text = f"{prefix}{marker} {label}"
-        _safe_addstr(window, y + 2, max(0, x - min(len(text) // 2, max(0, canvas_width - 1))), text,
-                     max(1, canvas_width - max(0, x - min(len(text) // 2, max(0, canvas_width - 1)))),
-                     colors["selected"] if selected_node is not None and index == selected else colors.get("device" if node.kind == "device" else "manual" if node.kind in {"manual", "zone"} else "hop", 0),
-                     unicode_ok=unicode_ok)
-        if node.review_count:
-            _safe_addstr(window, y + 2, min(canvas_width - 1, x + 1), "!", colors["review"], unicode_ok=unicode_ok)
+        draw_map_screen(window, snapshot, state, styles, unicode_ok)
+    draw_footer(window, snapshot, state, styles, unicode_ok, time.monotonic())
+    window.refresh()
 
-    # Show real edge provenance as a compact legend; no line is synthesized for isolated nodes.
-    legend = "  ".join(f"{_EDGE_GLYPHS.get(t, ('-', '─'))[1 if unicode_ok else 0]} {t}" for t in sorted({e.edge_type for e in snapshot.edges}))
-    if selected_edge is not None:
-        legend = f"> selected {selected_edge.edge_type} confidence={selected_edge.confidence:.2f}  " + legend
-    if legend:
-        _safe_addstr(window, height - 2, 0, legend, canvas_width, colors["edge"], unicode_ok=unicode_ok)
-    else:
-        _safe_addstr(window, height - 2, 0, "No topology links recorded; isolated nodes are not connected by inference.", canvas_width, colors["plain"], unicode_ok=unicode_ok)
 
-    divider_x = canvas_width + 1
+def _prompt(window: Any, label: str, styles: dict[str, int], unicode_ok: bool) -> str:
+    height, width = window.getmaxyx()
+    if height < 2:
+        return ""
+    echo_width = max(1, width - len(label) - 1)
     try:
-        for y in range(2, height - 2):
-            window.addch(y, divider_x, "|" if not unicode_ok else "│", colors["edge"])
+        curses.echo()
+        curses.curs_set(1)
+        safe_addstr(window, height - 1, 0, label, width, styles.get("accent", 0), unicode_ok=unicode_ok)
+        window.refresh()
+        raw = window.getstr(height - 1, len(label), echo_width)
+        return raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
     except curses.error:
-        pass
-    detail_x = divider_x + 2
-    if selected_node is not None:
-        _safe_addstr(window, 2, detail_x, "SELECTED", details_width, colors["header"], unicode_ok=unicode_ok)
-        _safe_addstr(window, 3, detail_x, f"Type: {selected_node.kind}", details_width, colors["plain"], unicode_ok=unicode_ok)
-        _safe_addstr(window, 4, detail_x, selected_node.label, details_width, colors["selected"], unicode_ok=unicode_ok)
-        _safe_addstr(window, 6, detail_x, "Addresses", details_width, colors["header"], unicode_ok=unicode_ok)
-        for offset, address in enumerate(selected_node.addresses[:max(0, height - 13)]):
-            _safe_addstr(window, 7 + offset, detail_x, address, details_width, colors["plain"], unicode_ok=unicode_ok)
-        info_y = min(height - 5, 8 + len(selected_node.addresses))
-        _safe_addstr(window, info_y, detail_x, f"Open ports: {selected_node.open_ports}", details_width, colors["plain"], unicode_ok=unicode_ok)
-        _safe_addstr(window, info_y + 1, detail_x, f"Hop distance: {selected_node.distance}", details_width, colors["plain"], unicode_ok=unicode_ok)
-        if selected_node.os_name:
-            _safe_addstr(window, info_y + 2, detail_x, f"OS: {selected_node.os_name}", details_width, colors["plain"], unicode_ok=unicode_ok)
-        if selected_node.review_count:
-            _safe_addstr(window, info_y + 3, detail_x, f"Review flags: {selected_node.review_count}", details_width, colors["review"], unicode_ok=unicode_ok)
-    elif selected_edge is not None:
-        by_id = {node.id: node for node in snapshot.nodes}
-        source = by_id.get(selected_edge.from_node_id)
-        destination = by_id.get(selected_edge.to_node_id)
-        _safe_addstr(window, 2, detail_x, "EDGE DETAILS", details_width, colors["header"], unicode_ok=unicode_ok)
-        _safe_addstr(window, 3, detail_x, selected_edge.edge_type, details_width, colors["selected"], unicode_ok=unicode_ok)
-        _safe_addstr(window, 4, detail_x, f"From: {source.label if source else selected_edge.from_node_id}", details_width, colors["plain"], unicode_ok=unicode_ok)
-        _safe_addstr(window, 5, detail_x, f"To: {destination.label if destination else selected_edge.to_node_id}", details_width, colors["plain"], unicode_ok=unicode_ok)
-        _safe_addstr(window, 7, detail_x, f"Source: {selected_edge.source_kind}", details_width, colors["plain"], unicode_ok=unicode_ok)
-        _safe_addstr(window, 8, detail_x, f"Source ID: {selected_edge.source_id or '-'}", details_width, colors["plain"], unicode_ok=unicode_ok)
-        _safe_addstr(window, 9, detail_x, f"Confidence: {selected_edge.confidence:.2f}", details_width, colors["plain"], unicode_ok=unicode_ok)
-        _safe_addstr(window, 11, detail_x, f"First seen: {selected_edge.first_observed_at or 'unknown'}", details_width, colors["plain"], unicode_ok=unicode_ok)
-        _safe_addstr(window, 12, detail_x, f"Last confirmed: {selected_edge.last_confirmed_at or 'not confirmed'}", details_width, colors["plain"], unicode_ok=unicode_ok)
-        _safe_addstr(window, 14, detail_x, f"Author: {selected_edge.author or '-'}", details_width, colors["plain"], unicode_ok=unicode_ok)
-    navigation = "↑/k/h previous  ↓/j/l next  e edges  n nodes  v Hosts  m Map  / search  r refresh  c root  ? help  q quit" if unicode_ok else "up/k/h previous  down/j/l next  e edges  n nodes  v Hosts  m Map  / search  r refresh  c root  ? help  q quit"
-    _safe_addstr(window, height - 1, 0, navigation, width, colors["header"], unicode_ok=unicode_ok)
-    window.refresh()
+        return ""
+    finally:
+        curses.noecho()
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+        window.timeout(1000)
 
 
-def _draw_hosts(window: Any, snapshot: MapSnapshot, selected: int, unicode_ok: bool, colors: dict[str, int]) -> None:
-    height, width = window.getmaxyx()
-    window.erase()
-    _safe_addstr(window, 0, 0, f"LUMOS  HOSTS  |  {snapshot.engagement_name}", width, colors["header"], unicode_ok=unicode_ok)
-    _safe_addstr(window, 1, 0, "[Map:m]  [Hosts:v]  ? Help", width, colors["plain"], unicode_ok=unicode_ok)
-    start = max(0, min(selected - (height - 5) // 2, max(0, len(snapshot.nodes) - (height - 4))))
-    for index, node in enumerate(snapshot.nodes[start:start + height - 4], start=start):
-        prefix = ">" if index == selected else " "
-        addresses = ", ".join(node.addresses)
-        row = f"{prefix}{node.kind:12} {node.label}  {addresses}  open:{node.open_ports}"
-        _safe_addstr(window, 2 + index - start, 0, row, width, colors["selected"] if index == selected else 0, unicode_ok=unicode_ok)
-    navigation = "↑/k/h previous  ↓/j/l next  m Map  r refresh  ? help  q quit" if unicode_ok else "up/k/h previous  down/j/l next  m Map  r refresh  ? help  q quit"
-    _safe_addstr(window, height - 1, 0, navigation, width, colors["header"], unicode_ok=unicode_ok)
-    window.refresh()
+def _show_help(
+    window: Any,
+    snapshot: MapSnapshot,
+    state: ViewState,
+    styles: dict[str, int],
+    unicode_ok: bool,
+    theme_name: str,
+    capability: str,
+) -> None:
+    window.timeout(-1)
+    try:
+        _draw_frame(window, snapshot, state, styles, unicode_ok, theme_name, capability)
+        draw_help(window, styles, unicode_ok)
+        window.refresh()
+        window.getch()
+    finally:
+        window.timeout(1000)
 
 
-def _show_help(window: Any, unicode_ok: bool, colors: dict[str, int]) -> None:
-    height, width = window.getmaxyx()
-    window.erase()
-    for row, text in enumerate((
-        "Lumos map prototype - keyboard controls",
-        "q       Quit and restore the terminal",
-        "UP / k / h      Select previous node",
-        "DOWN / j / l    Select next node",
-        "v       Show host list",
-        "e       Inspect observed topology edges and provenance",
-        "n       Return to root/node selection",
-        "m       Show map",
-        "/       Search node labels and addresses",
-        "r       Reload the read-only database snapshot",
-        "c       Select the scanner root",
-        "?       Return to the map",
-        "",
-        "Only stored topology_edges are drawn. Disconnected nodes remain unlinked.",
-        "Live scanning, saved layout, mouse, and edit actions are not in this slice.",
-        "",
-        "Press any key to return.",
-    )):
-        if row < height:
-            _safe_addstr(window, row, 1, text, width - 2, colors["header"] if row == 0 else 0, unicode_ok=unicode_ok)
-    window.refresh()
-    window.getch()
+def _pick_command(
+    window: Any,
+    snapshot: MapSnapshot,
+    state: ViewState,
+    styles: dict[str, int],
+    unicode_ok: bool,
+    theme_name: str,
+    capability: str,
+) -> str | None:
+    """Modal command palette; returns the chosen command name or ``None``."""
+    query = ""
+    index = 0
+    window.timeout(-1)
+    try:
+        while True:
+            needle = query.strip().lower()
+            entries = [
+                (label, description, name)
+                for label, description, name in _COMMANDS
+                if not needle or needle in label or needle in description.lower()
+            ]
+            index = max(0, min(index, max(0, len(entries) - 1)))
+            _draw_frame(window, snapshot, state, styles, unicode_ok, theme_name, capability)
+            draw_palette(window, styles, unicode_ok, query, entries, index)
+            window.refresh()
+            key = window.getch()
+            if key == -1:
+                continue
+            if key == 27:
+                return None
+            if key in (10, 13, curses.KEY_ENTER):
+                return entries[index][2] if entries else None
+            if key in (curses.KEY_BACKSPACE, 8, 127):
+                query = query[:-1]
+                index = 0
+                continue
+            if key in (curses.KEY_UP, curses.KEY_PPAGE):
+                index = max(0, index - 1)
+                continue
+            if key in (curses.KEY_DOWN, curses.KEY_NPAGE):
+                index = min(max(0, len(entries) - 1), index + 1)
+                continue
+            if key == 9:  # Tab autocompletes the highlighted label.
+                if entries:
+                    query = entries[index][0]
+                    continue
+            if 32 <= key < 127:
+                query += chr(key)
+                index = 0
+    finally:
+        window.timeout(1000)
 
 
 def _run_curses(window: Any, database: Path) -> None:
@@ -293,107 +263,152 @@ def _run_curses(window: Any, database: Path) -> None:
         curses.curs_set(0)
     except curses.error:
         pass
-    colors = _init_colors()
+    capability = theme.detect_capability()
+    theme_name = _initial_theme(capability)
+    styles = theme.init_styles(theme_name, capability)
     unicode_ok = _unicode_enabled()
     window.timeout(1000)
     watcher = MapSnapshotWatcher(database, interval=1.0)
     watcher.start()
     try:
-        _run_event_loop(window, database, watcher, unicode_ok, colors)
+        _run_event_loop(window, database, watcher, unicode_ok, styles, theme_name, capability)
     finally:
         watcher.stop()
 
 
-def _run_event_loop(window: Any, database: Path, watcher: MapSnapshotWatcher, unicode_ok: bool, colors: dict[str, int]) -> None:
+def _run_event_loop(
+    window: Any,
+    database: Path,
+    watcher: MapSnapshotWatcher,
+    unicode_ok: bool,
+    styles: dict[str, int],
+    theme_name: str,
+    capability: str,
+) -> None:
     snapshot = load_map_snapshot(database)
-    selected = 0
-    selected_kind = "node"
-    view = "map"
-    help_screen = False
+    state = ViewState()
+    _clamp_selection(state, snapshot)
     dirty = True
     while True:
-        if help_screen:
-            _show_help(window, unicode_ok, colors)
-            help_screen = False
         if dirty:
-            if view == "map":
-                _draw_map(window, snapshot, selected, selected_kind, unicode_ok, colors)
-            else:
-                _draw_hosts(window, snapshot, selected, unicode_ok, colors)
+            _draw_frame(window, snapshot, state, styles, unicode_ok, theme_name, capability)
             dirty = False
+        # Animate only while something is actually moving.
+        if snapshot.active_scans or state.notify_active():
+            window.timeout(250)
+            dirty = True
+        else:
+            window.timeout(1000)
         key = window.getch()
         updated = watcher.take_latest()
         if updated is not None:
             snapshot = updated
-            if selected_kind == "edge" and not snapshot.edges:
-                selected_kind = "node"
-            item_count = len(snapshot.edges) if selected_kind == "edge" else len(snapshot.nodes)
-            selected = min(selected, max(0, item_count - 1))
+            _clamp_selection(state, snapshot)
             dirty = True
         if key == -1:
             continue
-        dirty = True
-        if key in (ord("q"), 27):
-            return
         if key == curses.KEY_RESIZE:
             window.clearok(True)
+            dirty = True
             continue
-        if key == ord("e") and snapshot.edges:
-            selected_kind = "edge"
-            selected = min(selected, len(snapshot.edges) - 1)
-            view = "map"
-        elif key == ord("n"):
-            selected_kind = "node"
-            selected = next((i for i, node in enumerate(snapshot.nodes) if node.kind == "root"), 0)
-        elif key in (curses.KEY_UP, curses.KEY_LEFT, ord("k"), ord("h")):
-            count = len(snapshot.edges) if selected_kind == "edge" else len(snapshot.nodes)
-            selected = max(0, selected - 1)
-            selected = min(selected, max(0, count - 1))
-        elif key in (curses.KEY_DOWN, curses.KEY_RIGHT, ord("j"), ord("l")):
-            count = len(snapshot.edges) if selected_kind == "edge" else len(snapshot.nodes)
-            selected = min(max(0, count - 1), selected + 1)
-        elif key == ord("m"):
-            view = "map"
-        elif key == ord("v"):
-            selected_kind = "node"
-            selected = min(selected, max(0, len(snapshot.nodes) - 1))
-            view = "hosts"
+        if key in (ord("q"), 27):
+            return
+        if key == ord("?"):
+            _show_help(window, snapshot, state, styles, unicode_ok, theme_name, capability)
+            dirty = True
+            continue
+
+        action: str | None = None
+        if key == ord(":"):
+            action = _pick_command(window, snapshot, state, styles, unicode_ok, theme_name, capability)
+            dirty = True
+        elif key == ord("/"):
+            query = _prompt(window, "/", styles, unicode_ok)
+            found = _search(snapshot, query)
+            if found is None:
+                state.notify(f"no host matches {sanitize_text(query, max_chars=48)!r}")
+            else:
+                state.selected_kind = "node"
+                state.selected = found
+                _set_view(state, "map")
+            dirty = True
+        elif key in (ord("m"), ord("v"), ord("s")):
+            _set_view(state, {ord("m"): "map", ord("v"): "hosts", ord("s"): "scans"}[key])
+        elif key == 9:  # Tab cycles the three views.
+            current = VIEWS.index(state.view) if state.view in VIEWS else 0
+            _set_view(state, VIEWS[(current + 1) % len(VIEWS)])
+        elif key in (ord("e"), ord("n")):
+            if key == ord("e"):
+                _select_edges(state, snapshot)
+            else:
+                state.selected_kind = "node"
+                _set_view(state, "map")
+        elif key in (ord("c"), ord("C")):
+            _select_root(state, snapshot)
+        elif key in (ord("g"), ord("G")):
+            _jump_selection(state, snapshot, last=key == ord("G"))
+        elif key in (curses.KEY_UP, curses.KEY_LEFT, ord("k"), ord("j")):
+            _move_selection(state, snapshot, -1 if key in (curses.KEY_UP, curses.KEY_LEFT, ord("k")) else 1)
+        elif key in (curses.KEY_DOWN, curses.KEY_RIGHT, ord("l")):
+            _move_selection(state, snapshot, 1)
+        elif key == ord("h"):
+            _move_selection(state, snapshot, -1)
+        elif key in (ord("H"), ord("J"), ord("K"), ord("L")):
+            dx = -4 if key == ord("H") else 4 if key == ord("L") else 0
+            dy = -2 if key == ord("K") else 2 if key == ord("J") else 0
+            height, width = window.getmaxyx()
+            state.viewport = state.viewport.pan(dx, dy, width, height)
+        elif key in (ord("+"), ord("=")):
+            state.viewport = state.viewport.zoom_in()
+        elif key == ord("-"):
+            state.viewport = state.viewport.zoom_out()
+        elif key == ord("0"):
+            state.viewport = state.viewport.reset()
+        elif key == ord("t"):
+            theme_name = _cycle_theme(theme_name, capability)
+            styles = theme.init_styles(theme_name, capability)
+            state.notify(f"theme {theme_name} — {theme.THEME_DESCRIPTIONS.get(theme_name, '')}")
         elif key == ord("r"):
             snapshot = load_map_snapshot(database)
-            if selected_kind == "edge" and not snapshot.edges:
-                selected_kind = "node"
-            count = len(snapshot.edges) if selected_kind == "edge" else len(snapshot.nodes)
-            selected = min(selected, max(0, count - 1))
-        elif key == ord("c"):
-            selected_kind = "node"
-            selected = next((i for i, node in enumerate(snapshot.nodes) if node.kind == "root"), 0)
-            view = "map"
-        elif key == ord("?"):
-            help_screen = True
-        elif key == ord("/"):
-            query = ""
-            try:
-                curses.echo()
-                curses.curs_set(1)
-                height, width = window.getmaxyx()
-                _safe_addstr(window, height - 1, 0, "/", width, colors["header"], unicode_ok=unicode_ok)
-                window.refresh()
-                query = window.getstr(height - 1, 1, max(1, width - 2)).decode("utf-8", "replace")
-            except curses.error:
-                pass
-            finally:
-                curses.noecho()
-                try:
-                    curses.curs_set(0)
-                except curses.error:
-                    pass
-            needle = sanitize_text(query, max_chars=128).lower()
-            found = next((i for i, node in enumerate(snapshot.nodes)
-                          if needle and (needle in node.label.lower() or any(needle in addr.lower() for addr in node.addresses))), None)
-            if found is not None:
-                selected_kind = "node"
-                selected = found
-                view = "map"
+            _clamp_selection(state, snapshot)
+            state.notify("snapshot reloaded")
+        elif key in (10, 13):
+            _set_view(state, "map")
+        if action:
+            _run_command(action, window, database, state, snapshot, styles, theme_name, capability, unicode_ok)
+            if action == "quit":
+                return
+            if action in {"theme", "help"}:
+                capability = theme.detect_capability()
+                if action == "theme":
+                    theme_name = _cycle_theme(theme_name, capability)
+                    styles = theme.init_styles(theme_name, capability)
+                    state.notify(f"theme {theme_name} — {theme.THEME_DESCRIPTIONS.get(theme_name, '')}")
+                elif action == "help":
+                    _show_help(window, snapshot, state, styles, unicode_ok, theme_name, capability)
+            dirty = True
+        _clamp_selection(state, snapshot)
+
+
+def _run_command(
+    action: str,
+    window: Any,
+    database: Path,
+    state: ViewState,
+    snapshot: MapSnapshot,
+    styles: dict[str, int],
+    theme_name: str,
+    capability: str,
+    unicode_ok: bool,
+) -> None:
+    if action in VIEWS:
+        _set_view(state, action)
+    elif action == "edges":
+        _select_edges(state, snapshot)
+    elif action == "root":
+        _select_root(state, snapshot)
+    elif action == "refresh":
+        state.notify("snapshot reloaded")
 
 
 def run_tui(database: str | Path) -> int:
