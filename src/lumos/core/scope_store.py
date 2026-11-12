@@ -90,6 +90,36 @@ def add_scope_rule(
         conn.close()
 
 
+def ensure_network(database_path: str | Path, network_name: str = "default") -> str:
+    """Create an empty named network if needed and return its id.
+
+    A network row is only a grouping label; creating one grants no scope.
+    """
+    name = (network_name or "default").strip() or "default"
+    conn = open_database(database_path, readonly=False)
+    try:
+        engagement = conn.execute("SELECT id FROM engagement LIMIT 1").fetchone()
+        if engagement is None:
+            raise ValueError("Database has no engagement")
+        engagement_id = engagement[0]
+        engagement_uid = ids.ensure_engagement_uid(conn)
+        with conn:
+            network_id = ids.network_id(engagement_uid, name)
+            conn.execute(
+                "INSERT INTO networks(id, engagement_id, name, cidr, family, notes, created_at) "
+                "VALUES (?, ?, ?, NULL, NULL, '', ?) ON CONFLICT DO NOTHING",
+                (network_id, engagement_id, name, utc_now()),
+            )
+        row = conn.execute(
+            "SELECT id FROM networks WHERE engagement_id = ? AND name = ?", (engagement_id, name)
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"Could not create network {name!r}")
+        return str(row[0])
+    finally:
+        conn.close()
+
+
 def get_network(database_path: str | Path, name: str) -> tuple[str, str]:
     """Return engagement and network UUIDs for a named network."""
     conn = open_database(database_path, readonly=True)

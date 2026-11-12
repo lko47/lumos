@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import getpass
 import socket
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
@@ -67,6 +68,7 @@ def scan_database(
     scope_confirmation: str = "",
     on_command: Callable[[Sequence[str]], None] | None = None,
     on_progress: Callable[[str], None] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> ScanOutcome:
     """Validate scope, launch Nmap without a shell, and stream results to SQLite."""
     if not targets:
@@ -160,6 +162,7 @@ def scan_database(
             on_host=writer.submit_host,
             evidence=evidence,
             stderr_callback=on_progress,
+            cancel_event=cancel_event,
         )
     except BaseException as exc:
         writer.finish(

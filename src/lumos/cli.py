@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import sqlite3
 import sys
@@ -29,6 +30,8 @@ from .core.scan_store import ScanStoreError
 from .core.vantage_store import save_interfaces
 from .core.scope_store import add_scope_rule
 from .core.xml_import import import_nmap_xml
+from .services import actions
+from .core import state as local_state
 
 AUTHORIZED_USE_NOTICE = "Authorized use only: scan systems and networks you own or are explicitly permitted to assess. Confirm scope and permissions before proceeding."
 
@@ -39,7 +42,7 @@ def _parser() -> argparse.ArgumentParser:
         description="Terminal network mapping built on the user's installed Nmap.",
     )
     parser.add_argument("--version", action="version", version=f"lumos {__version__}")
-    commands = parser.add_subparsers(dest="command", required=True)
+    commands = parser.add_subparsers(dest="command")
 
     db = commands.add_parser("db", help="create or validate an engagement database")
     db_commands = db.add_subparsers(dest="db_command", required=True)
@@ -140,26 +143,53 @@ def _show_command(argv: Sequence[str], *, label: str, yes: bool) -> None:
 
 
 def _scope_show(path: Path) -> int:
-    conn = open_database(path, readonly=True)
-    try:
-        rows = conn.execute(
-            "SELECT included, rule_kind, rule_value, author, created_at "
-            "FROM scope_rules ORDER BY included DESC, rule_kind, rule_value"
+    outcome = actions.scope_entries(path)
+    if not outcome.ok:
+        raise DatabaseError(outcome.message)
+    entries = outcome.payload
+    for entry in entries:
+        print(
+            f"{'IN' if entry['included'] else 'EXCLUDE'} [engagement-wide] "
+            f"{entry['kind']} {entry['value']} "
+            f"(author={entry['author'] or '-'}, created={entry['created_at']})"
         )
-        count = 0
-        for row in rows:
-            count += 1
-            print(f"{'IN' if row[0] else 'EXCLUDE'} [engagement-wide] {row[1]} {row[2]} (author={row[3] or '-'}, created={row[4]})")
-        if not count:
-            print("No scope rules recorded.")
-        return 0
-    finally:
-        conn.close()
+    if not entries:
+        print("No scope rules recorded.")
+    return 0
+
+
+def _open_default(path: Path | None) -> int:
+    """Bare `lumos` opens the interface; a path argument opens that database."""
+    requested = path or os.environ.get("LUMOS_DB") or None
+    if requested is None:
+        from .tui.start import run_start_screen
+
+        return run_start_screen()
+    database = Path(requested).expanduser()
+    if not database.is_file():
+        print(f"lumos: no engagement database at {database}", file=sys.stderr)
+        return 2
+    from .tui.app import run_tui
+
+    local_state.remember_engagement(database)
+    return run_tui(database)
+
+
+SUBCOMMANDS = frozenset({"db", "scope", "interfaces", "scan", "import", "tui", "report"})
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    tokens = list(sys.argv[1:] if argv is None else argv)
+    if tokens and not tokens[0].startswith("-") and tokens[0] not in SUBCOMMANDS:
+        # `lumos PATH` opens the interface on that database.
+        if len(tokens) > 1:
+            print(f"lumos: unexpected arguments after {tokens[0]}: {' '.join(tokens[1:])}", file=sys.stderr)
+            return 2
+        return _open_default(Path(tokens[0]))
     parser = _parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(tokens)
+    if args.command is None:
+        return _open_default(None)
     try:
         if args.command == "interfaces":
             snapshot = discover_interfaces(args.nmap_executable)
@@ -203,27 +233,38 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"Saved {saved} interface(s) to vantage point {vantage_id[:8]}")
             return 0
         if args.command == "db" and args.db_command == "init":
-            engagement_id = initialize_database(args.path, args.name)
+            result = actions.create_engagement(args.path, args.name)
+            if not result.ok:
+                raise DatabaseError(result.message)
             print(AUTHORIZED_USE_NOTICE, file=sys.stderr)
-            print(f"Created {args.path} (engagement {engagement_id})")
+            print(f"Created {args.path}")
             return 0
         if args.command == "db" and args.db_command == "upgrade":
-            result = upgrade_database(args.path)
+            outcome = actions.upgrade(args.path)
+            if not outcome.ok:
+                raise DatabaseError(outcome.message)
+            result = outcome.payload
             print(
                 f"Upgraded {args.path} from schema {result['previous_user_version']} "
                 f"to {result['user_version']}; engagement uid {result['engagement_uid']}"
             )
             return 0
         if args.command == "db" and args.db_command == "merge":
-            stats = merge_engagement(
+            outcome = actions.merge(
                 args.target, args.source, operator=args.operator, dry_run=args.dry_run
             )
+            if not outcome.ok:
+                raise DatabaseError(outcome.message)
+            stats = outcome.payload
             copied = ", ".join(f"{table} {count}" for table, count in stats.rows.items() if count) or "nothing new"
             verb = "Would copy" if stats.dry_run else "Merged"
             print(f"{verb}: {copied}; total {stats.total} rows")
             return 0
         if args.command == "db" and args.db_command == "rebuild":
-            stats = rebuild_inferred(args.path)
+            outcome = actions.rebuild(args.path)
+            if not outcome.ok:
+                raise DatabaseError(outcome.message)
+            stats = outcome.payload
             if args.json:
                 print(json.dumps(asdict(stats), sort_keys=True))
             else:
@@ -234,7 +275,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             return 0
         if args.command == "db" and args.db_command == "check":
-            result = check_database(args.path)
+            outcome = actions.check(args.path)
+            if not outcome.ok:
+                raise DatabaseError(outcome.message)
+            result = outcome.payload
             print(
                 f"Valid Lumos database: schema {result['user_version']}; "
                 f"{result['tables']} tables; {result['views']} views; "
@@ -242,9 +286,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 0
         if args.command == "scope" and args.scope_command == "add":
-            network_id, inserted = add_scope_rule(
-                args.database, args.network, args.target, included=not args.exclude, author=args.author
+            outcome = actions.add_scope(
+                args.database,
+                args.target,
+                network=args.network,
+                included=not args.exclude,
+                author=args.author,
             )
+            if not outcome.ok:
+                raise ValueError(outcome.message)
+            network_id, inserted = outcome.payload.get("network_id", ""), outcome.payload["inserted"]
             print(f"{'Added' if inserted else 'Already present'} {'include' if not args.exclude else 'exclude'} rule in network {args.network!r} ({network_id})")
             return 0
         if args.command == "scope" and args.scope_command == "show":
@@ -276,17 +327,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(outcome.result.stderr, file=sys.stderr)
             return 0 if status == "completed" else 1
         if args.command == "import":
-            scan_id, hosts, parse_error = import_nmap_xml(
+            outcome = actions.import_xml(
                 args.database,
-                args.network,
                 args.xml_file,
+                network=args.network,
                 operator=args.operator,
                 evidence=not args.no_evidence,
             )
-            status = "partial/failed" if parse_error else "completed"
+            scan_id = (outcome.payload or {}).get("scan_id", "")
+            hosts = (outcome.payload or {}).get("hosts", 0)
+            status = "completed" if outcome.ok else "partial/failed"
             print(f"XML import {scan_id}: {status}; {hosts} host(s)")
-            if parse_error:
-                print(parse_error, file=sys.stderr)
+            if not outcome.ok:
+                print(outcome.detail or outcome.message, file=sys.stderr)
                 return 1
             return 0
         if args.command == "tui":
@@ -294,11 +347,17 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             return run_tui(args.database)
         if args.command == "report" and args.report_format == "svg":
-            write_svg_report(args.database, args.output, width=args.width, height=args.height)
+            outcome = actions.write_report(
+                args.database, args.output, report_format="svg", width=args.width, height=args.height
+            )
+            if not outcome.ok:
+                raise OSError(outcome.message)
             print(f"Wrote {args.output}")
             return 0
         if args.command == "report" and args.report_format == "markdown":
-            write_markdown_report(args.database, args.output)
+            outcome = actions.write_report(args.database, args.output, report_format="markdown")
+            if not outcome.ok:
+                raise OSError(outcome.message)
             print(f"Wrote Markdown report to {args.output}")
             return 0
     except ScopeConfirmationRequired as exc:

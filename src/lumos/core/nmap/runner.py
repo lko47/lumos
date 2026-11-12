@@ -268,6 +268,7 @@ def run_nmap(
     max_xml_bytes: int = DEFAULT_XML_LIMIT,
     stderr_callback: Callable[[str], None] | None = None,
     process_factory: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen,
+    cancel_event: threading.Event | None = None,
 ) -> NmapRunResult:
     """Run Nmap without a shell and stream each completed host to ``on_host``."""
     if not argv:
@@ -333,7 +334,13 @@ def run_nmap(
     reader = threading.Thread(target=read_and_parse, name="lumos-nmap-reader", daemon=True)
     reader.start()
     try:
-        reader.join()
+        # Poll so a caller (the TUI) can cancel without raising KeyboardInterrupt
+        # into this thread.
+        while reader.is_alive():
+            reader.join(timeout=0.2)
+            if cancel_event is not None and cancel_event.is_set() and not cancelled.is_set():
+                cancelled.set()
+                process.send_signal(signal.SIGINT)
     except KeyboardInterrupt:
         cancelled.set()
         process.send_signal(signal.SIGINT)
