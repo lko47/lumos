@@ -113,8 +113,14 @@ status bar carries a one-line legend that degrades to ASCII.
 
 A hub with more than 50 members collapses: its member nodes and links are not
 selected at all, so a 100,000-host engagement of 400 `/24` networks opens as 401
-nodes and draws a frame in ~28 ms (benchmark below). Expanding a collapsed hub
-on request, the link evidence panel and the promote/reject keys are not
+nodes and draws a frame in ~28 ms (benchmark below).
+
+Selecting a link explains it: the sidebar shows the rule, and a plain sentence
+such as "Inferred by on_link_arp: 192.0.2.14 is inside 192.0.2.0/24 on eth0
+and answered ARP. Confidence 0.95." On an inferred link `p` promotes it to a
+manual link (recorded with the author) and `x` rejects it, each after a second
+press; both choices go to `edge_decisions` and survive rebuilds and merges. `i`
+hides or shows inferred links. Expanding a collapsed hub on request is not
 implemented yet.
 
 Reports tell the same truth as the map. `lumos report markdown` lists inferred

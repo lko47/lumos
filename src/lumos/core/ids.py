@@ -46,6 +46,7 @@ TRACE_HOP = uuid.uuid5(_LUMOS, "trace_hop")
 IDENTITY_CLAIM = uuid.uuid5(_LUMOS, "identity_claim")
 ZONE = uuid.uuid5(_LUMOS, "zone")
 VANTAGE_ROUTE = uuid.uuid5(_LUMOS, "vantage_route")
+EDGE_DECISION = uuid.uuid5(_LUMOS, "edge_decision")
 
 ENGAGEMENT_UID_KEY = "engagement_uid"
 
@@ -133,6 +134,11 @@ def zone_id(uid: str, network: str, cidr: str) -> str:
 
 def vantage_route_id(uid: str, vantage: str, dst_cidr: str, dev: str, metric: int, gateway: str) -> str:
     return _make(VANTAGE_ROUTE, uid, vantage, dst_cidr, dev, metric, gateway)
+
+
+def edge_decision_id(uid: str, edge: str, decision: str, created_at: str) -> str:
+    """Decisions are append-only, so the timestamp is part of the key."""
+    return _make(EDGE_DECISION, uid, edge, decision, created_at)
 
 
 def inferred_edge_id(uid: str, from_node: str, to_node: str, rule: str) -> str:

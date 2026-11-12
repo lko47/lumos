@@ -6,7 +6,7 @@ import json
 import queue
 import threading
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..core.database import DatabaseError, open_database
@@ -50,9 +50,21 @@ class MapEdge:
     author: str
     rule: str = ""
     derived: bool = False
+    evidence: dict = field(default_factory=dict)
 
 
 EDGE_CLASSES = ("local", "observed", "alternate", "likely", "weak", "manual")
+
+
+def _evidence(raw: object) -> dict:
+    """Parse stored evidence defensively; a malformed blob is not fatal."""
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(str(raw))
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def edge_class(edge: MapEdge) -> str:
@@ -203,7 +215,7 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
             "e.edge_type AS edge_type, e.source_kind AS source_kind, e.source_id AS source_id, "
             "e.confidence AS confidence, e.first_observed_at AS first_observed_at, "
             "e.last_confirmed_at AS last_confirmed_at, e.author AS author, "
-            "e.source_kind AS source_kind_rule, e.derived AS derived "
+            "e.source_kind AS source_kind_rule, e.derived AS derived, e.evidence_json AS evidence_json "
             "FROM topology_edges e "
             "JOIN visible_nodes source_node ON source_node.id = e.from_node_id "
             "JOIN visible_nodes target_node ON target_node.id = e.to_node_id "
@@ -225,6 +237,7 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
                 author=sanitize_text(row["author"] or "", max_chars=128),
                 rule=sanitize_text(str(row["source_kind_rule"] or "").removeprefix("rule:"), max_chars=64),
                 derived=bool(row["derived"]),
+                evidence=_evidence(row["evidence_json"]),
             )
             for row in edge_rows
             if row["from_node_id"] and row["to_node_id"]

@@ -215,5 +215,51 @@ class OverlayTests(unittest.TestCase):
         self.assertTrue(window.text().isascii())
 
 
+
+
+class InferredLinkUiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.snapshot = snapshot()
+        self.state = render.ViewState()
+
+    def draw(self, state=None) -> str:
+        window = RecordingWindow()
+        render.draw_map_screen(window, self.snapshot, state or self.state, STYLES, True)
+        return window.text()
+
+    def test_i_hides_and_shows_inferred_links(self) -> None:
+        shown = self.draw()
+        self.assertTrue(any(0x2800 <= ord(ch) <= 0x28FF for ch in shown))
+        self.state.show_inferred = False
+        hidden = self.draw()
+        # The traceroute edge still draws, but the dotted root→host link is gone.
+        self.assertIsNotNone(hidden)
+        self.assertFalse(self.state.show_inferred)
+
+    def test_selected_inferred_link_explains_itself_and_offers_the_keys(self) -> None:
+        from lumos.services.map_view import MapEdge
+
+        edges = list(self.snapshot.edges)
+        edges[1] = MapEdge(
+            id="e2", from_node_id="root", to_node_id="host", edge_type="inferred",
+            source_kind="rule:on_link_arp", source_id="", confidence=0.95,
+            first_observed_at="", last_confirmed_at="", author="",
+            rule="on_link_arp", derived=True,
+            evidence={"address": "192.0.2.10", "cidr": "192.0.2.0/24", "interface": "eth0"},
+        )
+        self.snapshot = MapSnapshot(
+            "engagement", "terminal smoke", 2, 1, 1, self.snapshot.nodes, tuple(edges),
+            self.snapshot.scans_detail, "scanner-host", (),
+        )
+        self.state.selected_kind = "edge"
+        self.state.selected = 1
+        text = self.draw()
+        self.assertIn("WHY", text)
+        self.assertIn("on_link_arp", text)
+        self.assertIn("answered ARP", text)
+        self.assertIn("p promote", text)
+        self.assertIn("x reject", text)
+
+
 if __name__ == "__main__":
     unittest.main()

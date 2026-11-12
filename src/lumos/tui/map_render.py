@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
+from ..core.decisions import describe_edge
 from ..services.map_view import MapSnapshot, edge_class
 from .braille import BrailleCanvas
 from .layout import compute_layout
@@ -196,6 +197,8 @@ def draw_map_panel(
     if unicode_ok:
         layers: dict[str, BrailleCanvas] = {}
         for edge in snapshot.edges:
+            if not state.show_inferred and edge_class(edge) in {"likely", "weak"}:
+                continue
             start = projected.get(edge.from_node_id)
             end = projected.get(edge.to_node_id)
             if start is None or end is None or not _segment_visible(start, end, iw, ih):
@@ -211,6 +214,8 @@ def draw_map_panel(
     else:
         grids: dict[str, list[list[str]]] = {}
         for edge in snapshot.edges:
+            if not state.show_inferred and edge_class(edge) in {"likely", "weak"}:
+                continue
             start = projected.get(edge.from_node_id)
             end = projected.get(edge.to_node_id)
             if start is None or end is None or not _segment_visible(start, end, iw, ih):
@@ -334,6 +339,19 @@ def draw_sidebar(
                         _attr(styles, style),
                         unicode_ok=unicode_ok)
 
+    def wrap(text: str, width: int) -> list[str]:
+        words, rows, current = text.split(), [], ""
+        for word in words:
+            candidate = f"{current} {word}".strip()
+            if len(candidate) > width and current:
+                rows.append(current)
+                current = word
+            else:
+                current = candidate
+        if current:
+            rows.append(current)
+        return rows
+
     def field(row: int, label: str, value: str, style: str = "value") -> None:
         if 0 <= row < ih:
             label_value(window, itop + row, ileft, iw, label, value, styles,
@@ -351,11 +369,26 @@ def draw_sidebar(
         draw_meter(window, itop + 5, ileft, iw, edge.confidence, styles,
                    unicode_ok=unicode_ok, empty_attr=_attr(styles, "muted"))
         line(6, f"{edge.confidence:.2f}", "value")
-        field(8, "source", edge.source_kind)
+        field(8, "rule", edge.rule or edge.source_kind)
         field(9, "source id", edge.source_id or dash(unicode_ok))
         field(11, "first seen", short_time(edge.first_observed_at))
         field(12, "confirmed", short_time(edge.last_confirmed_at) if edge.last_confirmed_at else "not confirmed")
-        field(14, "author", edge.author or dash(unicode_ok))
+        field(13, "author", edge.author or dash(unicode_ok))
+        if edge.rule:
+            sentence = describe_edge(
+                edge.rule,
+                edge.evidence,
+                edge.confidence,
+                source_label=source.label if source else "",
+                destination_label=destination.label if destination else "",
+            )
+            line(15, "WHY", "muted")
+            rows = wrap(sentence, max(8, iw - 2))[: max(1, min(6, ih - 18))]
+            for offset, text in enumerate(rows):
+                line(16 + offset, text, "value")
+        if edge.edge_type == "inferred":
+            hint_row = min(ih - 1, 17 + len(rows))
+            line(hint_row, "p promote  x reject", "accent")
         return
 
     node = snapshot.nodes[state.selected] if 0 <= state.selected < len(snapshot.nodes) else None

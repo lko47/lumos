@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import curses
+import getpass
 import locale
 import os
 import signal
@@ -11,6 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ..core.decisions import DecisionError, record_decision
 from ..core.text import sanitize_text
 from ..services.map_view import MapSnapshot, MapSnapshotWatcher, load_map_snapshot, render_plain_snapshot
 from . import theme
@@ -375,6 +377,18 @@ def _run_event_loop(
             theme_name = _cycle_theme(theme_name, capability)
             styles = theme.init_styles(theme_name, capability)
             state.notify(f"theme {theme_name} — {theme.THEME_DESCRIPTIONS.get(theme_name, '')}")
+        elif key == ord("i"):
+            state.show_inferred = not state.show_inferred
+            state.notify(
+                "inferred links shown" if state.show_inferred else "inferred links hidden"
+            )
+        elif key in (ord("p"), ord("x")) and state.selected_kind == "edge":
+            _decide_link(database, state, snapshot, key)
+            try:
+                snapshot = load_map_snapshot(database)
+                _clamp_selection(state, snapshot)
+            except Exception:  # keep the previous snapshot on a reload failure
+                pass
         elif key == ord("r"):
             snapshot = load_map_snapshot(database)
             _clamp_selection(state, snapshot)
@@ -395,6 +409,33 @@ def _run_event_loop(
                     _show_help(window, snapshot, state, styles, unicode_ok, theme_name, capability)
             dirty = True
         _clamp_selection(state, snapshot)
+
+
+def _decide_link(database: Path, state: ViewState, snapshot: MapSnapshot, key: int) -> None:
+    """Two-press confirmation: p promotes, x rejects an inferred link."""
+    if not (0 <= state.selected < len(snapshot.edges)):
+        state.notify("select a link first")
+        return
+    edge = snapshot.edges[state.selected]
+    decision = "promoted" if key == ord("p") else "rejected"
+    verb = "promote" if decision == "promoted" else "reject"
+    if edge.edge_type != "inferred":
+        state.pending = None
+        state.notify(f"only inferred links can be {verb}d; this one is {edge.edge_type}")
+        return
+    if state.pending != (edge.id, decision):
+        state.pending = (edge.id, decision)
+        state.notify(f"press {'p' if decision == 'promoted' else 'x'} again to {verb} this link")
+        return
+    state.pending = None
+    try:
+        record_decision(database, edge.id, decision, author=getpass.getuser())
+    except (DecisionError, OSError) as exc:
+        state.notify(f"{verb} failed: {exc}")
+        return
+    state.notify(
+        "link promoted to a manual link" if decision == "promoted" else "link rejected; it will stay gone"
+    )
 
 
 def _run_command(

@@ -52,6 +52,8 @@ class ViewState:
     scan_selected: int = 0
     message: str = ""
     message_until: float = 0.0
+    show_inferred: bool = True
+    pending: tuple[str, str] | None = None
 
     def notify(self, text: str, seconds: float = 4.0) -> None:
         self.message = sanitize_text(text, max_chars=160)
