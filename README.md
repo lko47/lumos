@@ -50,7 +50,7 @@ To run the offline test suite without network access or a real scan:
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-Database creation refuses to overwrite an existing path and sets owner-only permissions. Report output is also created owner-only. Do not commit engagement databases, raw scan XML, or generated reports. `lumos db upgrade DATABASE` applies forward-only migrations to an existing file in place; the database keeps `application_id` `0x4C554D53` ("LUMS") and `user_version` 2.
+Database creation refuses to overwrite an existing path and sets owner-only permissions. Report output is also created owner-only. Do not commit engagement databases, raw scan XML, or generated reports. `lumos db upgrade DATABASE` applies forward-only migrations to an existing file in place; the database keeps `application_id` `0x4C554D53` ("LUMS") and `user_version` 3.
 
 ## Data handling and Nmap
 
@@ -67,6 +67,48 @@ The file format is designed for a read-only merge that does not duplicate rows:
 - Devices are deliberately **not** keyed on address or hostname: the same host seen twice stays two devices with a duplicate proposal until a human decides.
 - Schema 2 adds `meta` and `merge_log` (one row per merge attempt, with outcome `applied`, `rejected`, or `dry_run`), plus unique indexes on the natural keys of scope rules, review items, duplicate proposals, topology edges, vantage points, trace paths, script observations, and identity claims. Exact duplicates are collapsed to the earliest row when a v1 file is upgraded.
 - `lumos db upgrade DATABASE` migrates an existing v1 file in place; `lumos db check DATABASE` verifies `application_id`, `user_version`, the table/view set, foreign keys, and integrity.
+
+## Inferred links
+
+Not every scan has traceroute data: unprivileged scans fall back to `connect()`
+probes, which skip ARP, and Nmap's traceroute does not work with connect
+scans. Lumos therefore derives a *likely* structure from facts it does store,
+and marks every derived row so a guess never looks like a measurement.
+
+Inputs are recorded per scan: the interface table (address, prefix, type) and
+the routing table from `nmap --iflist`, captured automatically when a scan
+starts, plus each host's status reason, reason TTL and MAC. `lumos db rebuild
+DATABASE` re-derives everything from those facts; it also runs automatically
+after a completed scan or import.
+
+| Rule | Draws | Confidence |
+| --- | --- | --- |
+| `local_interface` | scanner root to a segment hub for one of its own connected networks | 1.0 |
+| `on_link_arp` | hub to host, when the host answered ARP/ND and has a MAC | 0.95 |
+| `on_link_address` | hub to host, addressing only | 0.70 |
+| `gateway_on_link` | hub to the gateway (the scanned device, else a placeholder hop) | 0.90 |
+| `routed_via_gateway` | gateway to a routed-subnet hub, then hub to host | 0.50 / 0.60 or 0.40 (assumed prefix) |
+| `unknown_path` | root to a "path unknown" hub, then hub to host, when no interface or route data exists | 0.20 / 0.40 |
+
+Hubs are broadcast domains or routed subnets, never devices, and are keyed on
+the network row plus the CIDR, so two scanners in one network share a hub and
+two different `10.0.0.0/24` networks never merge. An observed traceroute path
+from the same vantage point always wins: that host gets no inferred link, but
+keeps its zone membership. Many addresses answering ARP with one MAC are
+treated as suspected proxy ARP: those links are downgraded to addressing
+evidence and one review item names the MAC. Tunnel interfaces never supply ARP
+evidence, and link-local IPv6 or host routes (`/32`, `/128`) never create a
+segment hub.
+
+Every derived edge stores its rule, rule version and the row ids it used in
+`evidence_json`; `edge_decisions` records a user's `promoted` or `rejected`
+choice and survives rebuilds and merges. Rows the rebuild does not regenerate
+are deleted, but only when `derived = 1`.
+
+Rendering uses the evidence class: solid for observed and local links, dense
+dots for likely (>= 0.6), sparse dots for weak evidence, and a dashed style for
+manual links. The map, the evidence panel, hub collapsing and SVG report output
+for these classes are not implemented yet.
 
 ## Development status and project hygiene
 

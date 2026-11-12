@@ -22,6 +22,8 @@ class InterfaceEntry:
     is_up: bool
     mtu: int
     mac: str
+    prefix_len: int | None = None
+    family: int = 0
 
 
 @dataclass(frozen=True)
@@ -82,11 +84,16 @@ def parse_iflist_output(output: str) -> InterfaceSnapshot:
             if mtu < 0:
                 raise NmapRunnerError("Invalid interface MTU in Nmap --iflist output")
             address: str | None = None
+            prefix_len: int | None = None
+            family = 0
             if raw_address.lower() not in {"(none)/0", "none", "-"}:
                 try:
-                    address = str(ipaddress.ip_interface(raw_address))
+                    parsed = ipaddress.ip_interface(raw_address)
                 except ValueError as exc:
                     raise NmapRunnerError("Invalid interface address in Nmap --iflist output") from exc
+                address = str(parsed)
+                prefix_len = parsed.network.prefixlen
+                family = parsed.version
             mac = fields[6] if len(fields) > 6 else ""
             interfaces.append(
                 InterfaceEntry(
@@ -97,6 +104,8 @@ def parse_iflist_output(output: str) -> InterfaceSnapshot:
                     is_up=up_text.lower() == "up",
                     mtu=mtu,
                     mac=sanitize_text(mac, max_chars=64),
+                    prefix_len=prefix_len,
+                    family=family,
                 )
             )
         else:

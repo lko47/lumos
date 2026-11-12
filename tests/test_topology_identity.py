@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from lumos.core.inference import rebuild_inferred
 from lumos.core.database import initialize_database, open_database
 from lumos.core.scanning import scan_database
 from lumos.core.scope_store import add_scope_rule
@@ -110,23 +111,27 @@ class TopologyIdentityTests(unittest.TestCase):
         self.assertEqual(items, 1)
         self.assertEqual(events, 2)
 
-    def test_host_without_trace_gets_a_marked_inferred_link(self) -> None:
+    def test_untraced_host_link_comes_from_the_rebuild_not_the_scan(self) -> None:
         self._scan(UNTRACED)
-        row = self.conn.execute(
-            "SELECT edge_type, source_kind, confidence, last_confirmed_at, author "
-            "FROM topology_edges"
-        ).fetchone()
-        self.assertIsNotNone(row)
-        self.assertEqual(row[0], "inferred")
-        self.assertEqual(row[1], "inference")
-        self.assertAlmostEqual(row[2], 0.35)
-        self.assertIsNone(row[3], "an inference must not claim confirmation")
+        # Nothing is invented schematically: the post-scan rebuild derives the
+        # links from stored interface/route facts and marks every row derived.
+        self.assertEqual(self._count("SELECT COUNT(*) FROM topology_edges"), 2)
+        rebuild_inferred(self.db)
+        self.conn.close()
+        self.conn = open_database(self.db, readonly=True)
+        rows = self.conn.execute(
+            "SELECT edge_type, source_kind, confidence, last_confirmed_at, derived, evidence_json "
+            "FROM topology_edges ORDER BY confidence"
+        ).fetchall()
+        self.assertEqual(len(rows), 2)
+        self.assertTrue(all(row[0] == "inferred" and row[1].startswith("rule:") for row in rows))
+        self.assertTrue(all(row[4] == 1 for row in rows))
+        self.assertTrue(all(row[5] for row in rows))
+        self.assertAlmostEqual(rows[0][2], 0.2)
+        self.assertAlmostEqual(rows[1][2], 0.4)
         snapshot = load_map_snapshot(self.db)
-        self.assertEqual(len(snapshot.edges), 1)
+        self.assertEqual(len(snapshot.edges), 2)
         self.assertEqual(snapshot.edges[0].edge_type, "inferred")
-        from_id = snapshot.edges[0].from_node_id
-        root = next(node for node in snapshot.nodes if node.id == from_id)
-        self.assertEqual(root.kind, "root")
 
     def test_traced_hosts_do_not_get_inferred_links(self) -> None:
         self._scan(TRACED)

@@ -44,6 +44,8 @@ PORT = uuid.uuid5(_LUMOS, "port_observation")
 TRACE_PATH = uuid.uuid5(_LUMOS, "trace_path")
 TRACE_HOP = uuid.uuid5(_LUMOS, "trace_hop")
 IDENTITY_CLAIM = uuid.uuid5(_LUMOS, "identity_claim")
+ZONE = uuid.uuid5(_LUMOS, "zone")
+VANTAGE_ROUTE = uuid.uuid5(_LUMOS, "vantage_route")
 
 ENGAGEMENT_UID_KEY = "engagement_uid"
 
@@ -118,6 +120,24 @@ def trace_hop_id(path: str, hop_number: int) -> str:
 
 def identity_claim_id(device: str, kind: str, normalized_value: str, source_observation_id: str) -> str:
     return _make(IDENTITY_CLAIM, device, kind, normalized_value, source_observation_id)
+
+
+def zone_id(uid: str, network: str, cidr: str) -> str:
+    """A segment hub is keyed on its network row *and* its CIDR.
+
+    Two engagements that both contain 10.0.0.0/24 therefore keep separate
+    hubs, while two scanners attached to the same network share one.
+    """
+    return _make(ZONE, uid, network, cidr)
+
+
+def vantage_route_id(uid: str, vantage: str, dst_cidr: str, dev: str, metric: int, gateway: str) -> str:
+    return _make(VANTAGE_ROUTE, uid, vantage, dst_cidr, dev, metric, gateway)
+
+
+def inferred_edge_id(uid: str, from_node: str, to_node: str, rule: str) -> str:
+    """Id for a derived link; the rule is part of the key on purpose."""
+    return edge_id(uid, from_node, to_node, "inferred", f"rule:{rule}")
 
 
 def read_engagement_uid(conn: sqlite3.Connection) -> str:

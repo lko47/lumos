@@ -70,6 +70,7 @@ class HostRecord:
     scripts: tuple[ScriptRecord, ...]
     hops: tuple[HopRecord, ...]
     latency_seconds: float | None = None
+    reason_ttl: int | None = None
 
 
 def _tag(element: ET.Element) -> str:
@@ -107,6 +108,7 @@ def _parse_host(element: ET.Element) -> HostRecord:
     status = _first(element, "status")
     state = _text(status.get("state", "unknown") if status is not None else "unknown", limit=64)
     reason = _text(status.get("reason", "") if status is not None else "", limit=256)
+    reason_ttl = _integer(status.get("reason_ttl") if status is not None else None)
 
     addresses: list[AddressRecord] = []
     for address in _children(element, "address"):
@@ -208,6 +210,7 @@ def _parse_host(element: ET.Element) -> HostRecord:
     return HostRecord(
         state=state,
         reason=reason,
+        reason_ttl=reason_ttl,
         addresses=tuple(addresses),
         hostnames=tuple(hostnames),
         os_name=os_name,

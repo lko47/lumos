@@ -188,10 +188,11 @@ def _persist_host(conn, context: dict[str, Any], host: HostRecord) -> None:
         (device_id, engagement_id, now),
     )
     mac_vendor = next((a.vendor for a in host.addresses if a.kind == "mac" and a.vendor), "")
+    mac_address = next((a.value for a in host.addresses if a.kind == "mac" and a.value), "")
     host_json = json.dumps(asdict(host), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     conn.execute(
-        "INSERT INTO host_observations(id, scan_id, device_id, observed_at, reachability, discovery_method, hostname, os_name, os_accuracy, mac_vendor, latency_seconds, raw_host_json) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO host_observations(id, scan_id, device_id, observed_at, reachability, discovery_method, hostname, os_name, os_accuracy, mac_vendor, latency_seconds, raw_host_json, reason, reason_ttl, mac) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             observation_id,
             scan_id,
@@ -205,6 +206,9 @@ def _persist_host(conn, context: dict[str, Any], host: HostRecord) -> None:
             sanitize_text(mac_vendor, max_chars=512),
             host.latency_seconds,
             host_json,
+            sanitize_text(host.reason, max_chars=256),
+            host.reason_ttl,
+            sanitize_text(mac_address, max_chars=64),
         ),
     )
 
@@ -422,23 +426,9 @@ def _persist_host(conn, context: dict[str, Any], host: HostRecord) -> None:
                 1.0,
                 now,
             )
-    else:
-        # No traceroute data: record a clearly marked inference from the scanner
-        # root so the host is not silently disconnected. It is never presented
-        # as an observed link (dotted style, confidence well below 1.0).
-        _upsert_edge(
-            conn,
-            engagement_uid,
-            engagement_id,
-            root_id,
-            node_id,
-            "inferred",
-            "inference",
-            scan_id,
-            0.35,
-            now,
-            confirmed=False,
-        )
+    # No traceroute data: rebuild_inferred() derives a segment hub and a
+    # marked link from the stored interface/route facts. The scan itself never
+    # invents a link.
 
 
 class ScanWriter:
@@ -540,6 +530,10 @@ class ScanWriter:
             (engagement_id, ctx["scanner_name"]),
         ).fetchone()
         ctx["vantage_id"] = str(vantage[0])
+        if ctx.get("iflist") is not None:
+            from .vantage_store import write_snapshot
+
+            write_snapshot(conn, engagement_uid, ctx["vantage_id"], ctx["iflist"], ctx["started_at"])
         ctx["root_node_id"] = ensure_node(
             conn,
             engagement_id,

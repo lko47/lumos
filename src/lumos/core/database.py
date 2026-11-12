@@ -18,6 +18,7 @@ EXPECTED_TABLES = frozenset(
     identity_claims scans host_observations observation_addresses port_observations
     script_observations topology_nodes trace_paths trace_hops manual_nodes zones
     zone_memberships topology_edges node_positions human_edits notes tags tag_links
+    vantage_routes edge_decisions
     review_items review_events duplicate_proposals duplicate_proposal_events
     scope_rules audit_events raw_scan_evidence meta merge_log""".split()
 )

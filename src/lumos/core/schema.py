@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 APPLICATION_ID = 0x4C554D53  # ASCII "LUMS"; stable for this database format.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # Schema objects are authored here. Import validation will compare against these
 # names and column layouts; it must never execute SQL read from an imported file.
@@ -482,5 +482,88 @@ MIGRATIONS[2] = _MIGRATION_2
 
 # The application id is written from the constant so the file identity and the
 # validator can never drift apart.
+
+# Schema 3 records what the inference engine needs: interface prefixes and
+# types, the scanner's routing table, the host status reason (with TTL), MAC
+# evidence, derived zones, an append-only edge-decision log, and an
+# ``edge_type = 'local'`` class for the scanner's own attachment to a segment.
+#
+# SQLite cannot alter a CHECK constraint, so topology_edges is rebuilt in place
+# and the naive schema-2 "every untraced host is one root edge at 0.35" rows are
+# dropped: rebuild_inferred() replaces them with explainable segment hubs.
+_MIGRATION_3 = r"""
+ALTER TABLE vantage_points ADD COLUMN kind TEXT NOT NULL DEFAULT 'nmap';
+
+ALTER TABLE vantage_interfaces ADD COLUMN prefix_len INTEGER;
+ALTER TABLE vantage_interfaces ADD COLUMN family INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE vantage_interfaces ADD COLUMN iface_type TEXT NOT NULL DEFAULT '';
+
+CREATE TABLE vantage_routes (
+    id TEXT PRIMARY KEY,
+    vantage_point_id TEXT NOT NULL REFERENCES vantage_points(id) ON DELETE CASCADE,
+    dst_cidr TEXT NOT NULL,
+    dev TEXT NOT NULL DEFAULT '',
+    metric INTEGER NOT NULL DEFAULT 0 CHECK (metric >= 0),
+    gateway TEXT NOT NULL DEFAULT '',
+    captured_at TEXT NOT NULL
+);
+CREATE INDEX idx_vantage_routes_vantage ON vantage_routes(vantage_point_id, dst_cidr);
+CREATE UNIQUE INDEX ux_vantage_routes_natural
+    ON vantage_routes(vantage_point_id, dst_cidr, dev, gateway, metric);
+
+ALTER TABLE host_observations ADD COLUMN reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE host_observations ADD COLUMN reason_ttl INTEGER;
+ALTER TABLE host_observations ADD COLUMN mac TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE zones ADD COLUMN derived INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE zones ADD COLUMN cidr TEXT NOT NULL DEFAULT '';
+ALTER TABLE zones ADD COLUMN network_id TEXT REFERENCES networks(id);
+CREATE UNIQUE INDEX ux_zones_derived
+    ON zones(engagement_id, network_id, cidr) WHERE derived = 1;
+
+CREATE TABLE edge_decisions (
+    id TEXT PRIMARY KEY,
+    engagement_id TEXT NOT NULL REFERENCES engagement(id) ON DELETE CASCADE,
+    edge_id TEXT NOT NULL,
+    decision TEXT NOT NULL CHECK (decision IN ('promoted', 'rejected')),
+    author TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX idx_edge_decisions_edge ON edge_decisions(edge_id, created_at DESC);
+
+CREATE TABLE topology_edges_v3 (
+    id TEXT PRIMARY KEY,
+    engagement_id TEXT NOT NULL REFERENCES engagement(id) ON DELETE CASCADE,
+    from_node_id TEXT NOT NULL REFERENCES topology_nodes(id) ON DELETE CASCADE,
+    to_node_id TEXT NOT NULL REFERENCES topology_nodes(id) ON DELETE CASCADE,
+    edge_type TEXT NOT NULL CHECK (edge_type IN
+        ('traceroute', 'alternate', 'inferred', 'local', 'manual', 'imported')),
+    source_kind TEXT NOT NULL,
+    source_id TEXT,
+    confidence REAL NOT NULL DEFAULT 1.0 CHECK (confidence >= 0.0 AND confidence <= 1.0),
+    first_observed_at TEXT NOT NULL,
+    last_confirmed_at TEXT,
+    author TEXT NOT NULL DEFAULT '',
+    derived INTEGER NOT NULL DEFAULT 0,
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    CHECK (from_node_id <> to_node_id)
+);
+INSERT INTO topology_edges_v3(id, engagement_id, from_node_id, to_node_id, edge_type,
+        source_kind, source_id, confidence, first_observed_at, last_confirmed_at, author)
+    SELECT id, engagement_id, from_node_id, to_node_id, edge_type, source_kind, source_id,
+           confidence, first_observed_at, last_confirmed_at, author
+    FROM topology_edges
+    WHERE NOT (edge_type = 'inferred' AND source_kind = 'inference' AND confidence <= 0.35);
+DROP TABLE topology_edges;
+ALTER TABLE topology_edges_v3 RENAME TO topology_edges;
+CREATE INDEX idx_topology_edges_from ON topology_edges(engagement_id, from_node_id, edge_type);
+CREATE INDEX idx_topology_edges_to ON topology_edges(engagement_id, to_node_id, edge_type);
+CREATE INDEX idx_topology_edges_source ON topology_edges(source_kind, source_id);
+CREATE UNIQUE INDEX ux_topology_edges_natural
+    ON topology_edges(engagement_id, from_node_id, to_node_id, edge_type, source_kind);
+"""
+
+MIGRATIONS[3] = _MIGRATION_3
+
 _MIGRATION_1 = "PRAGMA application_id = %d;\n" % APPLICATION_ID + _MIGRATION_1
 MIGRATIONS[1] = _MIGRATION_1

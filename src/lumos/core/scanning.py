@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from .database import open_database
+from .nmap.iflist import discover_interfaces
 from .nmap.runner import (
     NmapRunResult,
     build_nmap_argv,
@@ -145,6 +146,13 @@ def scan_database(
         evidence_enabled=evidence,
     )
     context["scope_rules"] = scope_rules
+    # Capture the routing table the scan actually ran on. Without it the
+    # inference engine cannot tell a connected network from a routed one, and a
+    # laptop that changed networks would keep confidently wrong links.
+    try:
+        context["iflist"] = discover_interfaces(nmap)
+    except Exception:  # --iflist is best-effort; never abort a scan for it
+        context["iflist"] = None
     writer = ScanWriter(database_path, context)
     try:
         result = run_nmap(
@@ -178,4 +186,14 @@ def scan_database(
         evidence_sha256=result.xml_sha256,
         detail=result.parse_error or result.stderr,
     )
+    if status == "completed":
+        # Derive the inferred links from the stored interface/route facts. This
+        # runs on its own connection after the writer thread closed, and a
+        # failure here must never turn a successful scan into a failed one.
+        try:
+            from .inference import rebuild_inferred
+
+            rebuild_inferred(database_path)
+        except Exception:
+            pass
     return ScanOutcome(context["scan_id"], result, tuple(argv), tuple(resolved_targets), scope_override)

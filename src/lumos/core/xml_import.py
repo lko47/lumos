@@ -151,4 +151,12 @@ def import_nmap_xml(
         evidence_sha256=sha256,
         detail=parse_error or f"Imported from {source.name}",
     )
+    if status == "completed":
+        try:
+            from .inference import rebuild_inferred
+
+            rebuild_inferred(database_path)
+        except Exception:
+            # Inference is best-effort: an import that parsed must still land.
+            pass
     return context["scan_id"], host_count, parse_error

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Sequence
 
 from . import __version__
+from .core.inference import rebuild_inferred
 from .core.database import (
     DatabaseError,
     check_database,
@@ -48,6 +49,11 @@ def _parser() -> argparse.ArgumentParser:
     check.add_argument("path", type=Path)
     upgrade = db_commands.add_parser("upgrade", help="apply forward-only schema migrations in place")
     upgrade.add_argument("path", type=Path)
+    rebuild = db_commands.add_parser(
+        "rebuild", help="derive inferred segment hubs and links from stored facts"
+    )
+    rebuild.add_argument("path", type=Path)
+    rebuild.add_argument("--json", action="store_true", help="print the result as JSON")
 
     scope = commands.add_parser("scope", help="manage the engagement's scan scope")
     scope_commands = scope.add_subparsers(dest="scope_command", required=True)
@@ -192,6 +198,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"Upgraded {args.path} from schema {result['previous_user_version']} "
                 f"to {result['user_version']}; engagement uid {result['engagement_uid']}"
             )
+            return 0
+        if args.command == "db" and args.db_command == "rebuild":
+            stats = rebuild_inferred(args.path)
+            if args.json:
+                print(json.dumps(asdict(stats), sort_keys=True))
+            else:
+                print(
+                    f"Rebuilt {stats.hubs} hubs, {stats.edges} links "
+                    f"({stats.local_edges} local), {stats.memberships} memberships; "
+                    f"removed {stats.removed_edges} stale links and {stats.removed_hubs} stale hubs."
+                )
             return 0
         if args.command == "db" and args.db_command == "check":
             result = check_database(args.path)
