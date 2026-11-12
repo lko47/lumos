@@ -14,10 +14,15 @@ _DOT_BITS = (
 # Dot cadence: traceroute is solid; alternate adds a parallel solid trace;
 # inferred is dotted, and manual/imported edges use distinct dash lengths.
 _STYLE_PATTERN = {
-    "traceroute": (1, 0),
+    "local": (1, 0),
+    "observed": (1, 0),
     "alternate": (1, 0),
-    "inferred": (1, 2),
+    "likely": (2, 1),
+    "weak": (1, 3),
     "manual": (3, 2),
+    # Legacy names stay valid for tests and older callers.
+    "traceroute": (1, 0),
+    "inferred": (1, 2),
     "imported": (2, 3),
 }
 

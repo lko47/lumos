@@ -25,6 +25,9 @@ class MapNode:
     review_count: int
     distance: int
     ports: tuple[str, ...] = ()
+    member_count: int = 0
+    assumed: bool = False
+    placeholder: bool = False
 
 
 @dataclass(frozen=True)
@@ -39,6 +42,29 @@ class MapEdge:
     first_observed_at: str
     last_confirmed_at: str
     author: str
+    rule: str = ""
+    derived: bool = False
+
+
+EDGE_CLASSES = ("local", "observed", "alternate", "likely", "weak", "manual")
+
+
+def edge_class(edge: MapEdge) -> str:
+    """Map a stored link to the evidence class the renderer draws.
+
+    Confidence only splits inferred links: everything from 0.6 up is "likely"
+    (dense dots), below that is "weak" (sparse dots). A guess can therefore
+    never take a solid line.
+    """
+    if edge.edge_type == "local":
+        return "local"
+    if edge.edge_type == "manual":
+        return "manual"
+    if edge.edge_type == "alternate":
+        return "alternate"
+    if edge.edge_type == "inferred":
+        return "likely" if edge.confidence >= 0.6 else "weak"
+    return "observed"
 
 
 @dataclass(frozen=True)
@@ -131,7 +157,8 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
                       COALESCE(a.addresses, '') AS addresses,
                       COALESCE(pc.open_ports, 0) AS open_ports,
                       COALESCE(ha.display_value, '') AS hop_address,
-                      COALESCE((SELECT group_concat(p.port || '/' || p.protocol, ' ')
+                      (SELECT COUNT(*) FROM zone_memberships zm WHERE zm.topology_node_id = tn.id) AS members,
+               COALESCE((SELECT group_concat(p.port || '/' || p.protocol, ' ')
                                 FROM port_observations p
                                 WHERE p.host_observation_id = l.id AND p.state = 'open'), '') AS ports,
                       (SELECT COUNT(*) FROM review_items ri
@@ -164,7 +191,8 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
             "SELECT e.id AS edge_id, e.from_node_id AS from_node_id, e.to_node_id AS to_node_id, "
             "e.edge_type AS edge_type, e.source_kind AS source_kind, e.source_id AS source_id, "
             "e.confidence AS confidence, e.first_observed_at AS first_observed_at, "
-            "e.last_confirmed_at AS last_confirmed_at, e.author AS author "
+            "e.last_confirmed_at AS last_confirmed_at, e.author AS author, "
+            "e.source_kind AS source_kind_rule, e.derived AS derived "
             "FROM topology_edges e "
             "JOIN visible_nodes source_node ON source_node.id = e.from_node_id "
             "JOIN visible_nodes target_node ON target_node.id = e.to_node_id "
@@ -184,6 +212,8 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
                 first_observed_at=sanitize_text(row["first_observed_at"], max_chars=64),
                 last_confirmed_at=sanitize_text(row["last_confirmed_at"] or "", max_chars=64),
                 author=sanitize_text(row["author"] or "", max_chars=128),
+                rule=sanitize_text(str(row["source_kind_rule"] or "").removeprefix("rule:"), max_chars=64),
+                derived=bool(row["derived"]),
             )
             for row in edge_rows
             if row["from_node_id"] and row["to_node_id"]
@@ -225,6 +255,10 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
                         for item in str(row["ports"] or "").split(" ")
                         if item
                     )[:16],
+                    member_count=int(row["members"] or 0),
+                    assumed=label.startswith("~"),
+                    placeholder=kind == "unknown_hop"
+                    and str(row["entity_id"] or "").startswith("gateway:"),
                 )
             )
 
@@ -252,8 +286,20 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
                 MapNode("pending-root", "root", "Scanner not yet recorded", (), "", 0, 0, 0),
             )
         nodes = [
-            MapNode(n.id, n.kind, n.label, n.addresses, n.os_name, n.open_ports, n.review_count,
-                    distances.get(n.id, 2 if n.kind != "root" else 0), n.ports)
+            MapNode(
+                n.id,
+                n.kind,
+                n.label,
+                n.addresses,
+                n.os_name,
+                n.open_ports,
+                n.review_count,
+                distances.get(n.id, 2 if n.kind != "root" else 0),
+                n.ports,
+                n.member_count,
+                n.assumed,
+                n.placeholder,
+            )
             for n in nodes
         ]
         # The bounded SQL picks nodes by kind and id (index-friendly); order the

@@ -149,7 +149,12 @@ def draw_footer(
         safe_addstr(window, height - 2, 1, clip(text, width - 2, unicode_ok=unicode_ok), width - 2,
                     attr(styles, "scan_running"), unicode_ok=unicode_ok)
     else:
-        text = "Ready. Nmap is not launched from this view; use the CLI scan command."
+        legend = (
+            "\u2501 local  \u2500 observed  \u2504 likely  \u2570 weak"
+            if unicode_ok
+            else "= local  - observed  : likely  . weak"
+        )
+        text = f"Ready. {legend}."
         safe_addstr(window, height - 2, 1, clip(text, width - 2, unicode_ok=unicode_ok), width - 2,
                     attr(styles, "muted"), unicode_ok=unicode_ok)
 

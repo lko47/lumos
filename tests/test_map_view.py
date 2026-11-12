@@ -10,7 +10,7 @@ from unittest.mock import patch
 from lumos.core.database import initialize_database, open_database
 from lumos.core.scanning import scan_database
 from lumos.core.scope_store import add_scope_rule
-from lumos.services.map_view import load_map_snapshot, render_plain_snapshot
+from lumos.services.map_view import MapEdge, edge_class, load_map_snapshot, render_plain_snapshot
 
 ROOT = Path(__file__).resolve().parents[1]
 FAKE = ROOT / "tests" / "fake_nmap" / "nmap"
@@ -100,6 +100,31 @@ class MapSnapshotTests(unittest.TestCase):
     def test_node_limit_must_be_positive(self) -> None:
         with self.assertRaisesRegex(ValueError, "at least 1"):
             load_map_snapshot(self.db, max_nodes=0)
+
+
+
+
+class EdgeClassTests(unittest.TestCase):
+    def edge(self, edge_type: str, confidence: float = 1.0) -> MapEdge:
+        return MapEdge(
+            id="e", from_node_id="a", to_node_id="b", edge_type=edge_type,
+            source_kind="nmap_xml", source_id="", confidence=confidence,
+            first_observed_at="", last_confirmed_at="", author="",
+        )
+
+    def test_classes_follow_evidence_not_decoration(self) -> None:
+        self.assertEqual(edge_class(self.edge("local")), "local")
+        self.assertEqual(edge_class(self.edge("traceroute")), "observed")
+        self.assertEqual(edge_class(self.edge("alternate")), "alternate")
+        self.assertEqual(edge_class(self.edge("manual")), "manual")
+        self.assertEqual(edge_class(self.edge("inferred", 0.95)), "likely")
+        self.assertEqual(edge_class(self.edge("inferred", 0.6)), "likely")
+        self.assertEqual(edge_class(self.edge("inferred", 0.59)), "weak")
+        self.assertEqual(edge_class(self.edge("inferred", 0.2)), "weak")
+
+    def test_only_inferred_links_can_ever_be_dotted(self) -> None:
+        for edge_type in ("traceroute", "alternate", "manual", "local", "imported"):
+            self.assertNotIn(edge_class(self.edge(edge_type)), {"likely", "weak"})
 
 
 if __name__ == "__main__":

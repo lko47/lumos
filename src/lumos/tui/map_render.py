@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from ..services.map_view import MapSnapshot
+from ..services.map_view import MapSnapshot, edge_class
 from .braille import BrailleCanvas
 from .layout import compute_layout
 from .widgets import (
@@ -21,6 +21,8 @@ from .widgets import (
 
 
 _KIND_GLYPHS = {
+    "zone_hub": ("<>", "◇"),
+    "gateway": ("o", "○"),
     "root": ("@", "◆"),
     "device": ("o", "●"),
     "hop": ("+", "○"),
@@ -30,14 +32,16 @@ _KIND_GLYPHS = {
 }
 
 _EDGE_GLYPHS = {
-    "traceroute": ("-", "─"),
+    "local": ("=", "━"),
+    "observed": ("-", "─"),
     "alternate": ("=", "═"),
-    "inferred": (".", "┄"),
+    "likely": (":", "┄"),
+    "weak": (".", "╌"),
     "manual": ("#", "╳"),
-    "imported": ("~", "┈"),
 }
 
-_EDGE_PRIORITY = ("traceroute", "alternate", "manual", "imported", "inferred")
+# Overlap precedence: a measurement always wins over a guess.
+_EDGE_PRIORITY = ("local", "observed", "alternate", "manual", "likely", "weak")
 
 
 def _attr(styles: dict[str, int], name: str, default: int = 0) -> int:
@@ -177,9 +181,10 @@ def draw_map_panel(
             end = projected.get(edge.to_node_id)
             if start is None or end is None or not _segment_visible(start, end, iw, ih):
                 continue
-            canvas = layers.setdefault(edge.edge_type, BrailleCanvas(iw, ih))
+            style_name = edge_class(edge)
+            canvas = layers.setdefault(style_name, BrailleCanvas(iw, ih))
             canvas.draw_line((start[0] * 2 + 1, start[1] * 4 + 2),
-                             (end[0] * 2 + 1, end[1] * 4 + 2), style=edge.edge_type)
+                             (end[0] * 2 + 1, end[1] * 4 + 2), style=style_name)
         runs = _braille_runs(layers, iw, ih)
     else:
         grids: dict[str, list[list[str]]] = {}
@@ -188,8 +193,9 @@ def draw_map_panel(
             end = projected.get(edge.to_node_id)
             if start is None or end is None or not _segment_visible(start, end, iw, ih):
                 continue
-            grid = grids.setdefault(edge.edge_type, [[" " for _ in range(iw)] for _ in range(ih)])
-            _raster_line(grid, start, end, _EDGE_GLYPHS.get(edge.edge_type, ("-", "─"))[0])
+            style_name = edge_class(edge)
+            grid = grids.setdefault(style_name, [[" " for _ in range(iw)] for _ in range(ih)])
+            _raster_line(grid, start, end, _EDGE_GLYPHS.get(style_name, ("-", "─"))[0])
         runs = _ascii_runs(grids, iw, ih)
 
     for row, row_runs in enumerate(runs):
@@ -222,10 +228,18 @@ def draw_map_panel(
         point = projected.get(node.id)
         if point is None or not (0 <= point[0] < iw and 0 <= point[1] < ih):
             continue
-        marker = _KIND_GLYPHS.get(node.kind, ("?", "?"))[1 if unicode_ok else 0]
         selected = selected_node is not None and index == state.selected
         prefix = "▶" if selected and unicode_ok else ">" if selected else " "
-        label = clip(node.label, max(4, min(22, iw - 4)), unicode_ok=unicode_ok)
+        if node.kind == "zone" and node.member_count:
+            separator = " · " if unicode_ok else " * "
+            label = f"{node.label}{separator}{node.member_count}"
+        else:
+            label = node.label
+        marker = _KIND_GLYPHS.get(
+            "zone_hub" if node.kind == "zone" else "gateway" if node.placeholder else node.kind,
+            ("?", "?"),
+        )[1 if unicode_ok else 0]
+        label = clip(label, max(4, min(24, iw - 4)), unicode_ok=unicode_ok)
         flag = "!" if node.review_count else ""
         marker_text = f"{prefix}{marker}{flag}"
         text = f"{marker_text} {label}"
