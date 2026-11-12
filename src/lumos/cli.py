@@ -18,6 +18,7 @@ from .core.nmap.runner import NmapRunnerError
 from .core.reports import write_markdown_report
 from .core.scanning import ScopeConfirmationRequired, scan_database
 from .core.scan_store import ScanStoreError
+from .core.vantage_store import save_interfaces
 from .core.scope_store import add_scope_rule
 from .core.xml_import import import_nmap_xml
 
@@ -54,8 +55,19 @@ def _parser() -> argparse.ArgumentParser:
     interfaces = commands.add_parser(
         "interfaces", help="show scanner interfaces and routes from Nmap --iflist"
     )
+    interfaces.add_argument(
+        "database",
+        nargs="?",
+        type=Path,
+        help="engagement database (required with --save)",
+    )
     interfaces.add_argument("--nmap", dest="nmap_executable", help="explicit Nmap executable path")
     interfaces.add_argument("--json", action="store_true", help="print structured JSON")
+    interfaces.add_argument(
+        "--save",
+        action="store_true",
+        help="record the discovered interfaces on the engagement vantage point",
+    )
 
     scan = commands.add_parser("scan", help="run a scope-checked scan using the installed Nmap")
     scan.add_argument("database", type=Path)
@@ -155,6 +167,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                         f"  {item.destination} dev {item.device}{gateway} "
                         f"(metric {item.metric})"
                     )
+            if args.save:
+                if args.database is None:
+                    raise ValueError("--save requires an engagement database path")
+                vantage_id, saved = save_interfaces(args.database, snapshot)
+                print(f"Saved {saved} interface(s) to vantage point {vantage_id[:8]}")
             return 0
         if args.command == "db" and args.db_command == "init":
             engagement_id = initialize_database(args.path, args.name)

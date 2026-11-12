@@ -13,6 +13,7 @@ from .layout import Viewport
 from .map_render import draw_map_panel, draw_sidebar
 from .widgets import (
     clip,
+    dash,
     display_width,
     draw_box,
     draw_meter,
@@ -96,7 +97,8 @@ def draw_header(
     brand_text = f" {brand} "
     safe_addstr(window, 0, 0, clip(brand_text, width), width, attr(styles, "brand"), unicode_ok=unicode_ok)
     used = display_width(brand_text)
-    head = clip(f" {view}  {sep}  {snapshot.engagement_name}  {sep}  ", max(0, width - used))
+    head = clip(f" {view}  {sep}  {snapshot.engagement_name}  {sep}  ", max(0, width - used),
+                unicode_ok=unicode_ok)
     safe_addstr(window, 0, used, head, max(0, width - used), attr(styles, "subtitle"), unicode_ok=unicode_ok)
     used += display_width(head)
     stats = (
@@ -104,7 +106,7 @@ def draw_header(
         f"nodes {len(snapshot.nodes)}  review {snapshot.review_items}"
     )
     remaining = max(0, width - used - 10)
-    stats = clip(stats, remaining)
+    stats = clip(stats, remaining, unicode_ok=unicode_ok)
     stats_style = attr(styles, "scan_running") if snapshot.active_scans else attr(styles, "accent")
     safe_addstr(window, 0, used, stats, remaining, stats_style, unicode_ok=unicode_ok)
     used += display_width(stats)
@@ -135,16 +137,17 @@ def draw_footer(
     if height < 3:
         return
     if state.notify_active():
-        safe_addstr(window, height - 2, 1, clip(state.message, width - 2), width - 2,
+        safe_addstr(window, height - 2, 1, clip(state.message, width - 2, unicode_ok=unicode_ok), width - 2,
                     attr(styles, "warn"), unicode_ok=unicode_ok)
     elif snapshot.active_scans:
         frame = spinner(now, unicode_ok)
-        text = f"{frame} {snapshot.active_scans} scan(s) running — live updates stream in as hosts commit"
-        safe_addstr(window, height - 2, 1, clip(text, width - 2), width - 2,
+        text = (f"{frame} {snapshot.active_scans} scan(s) running "
+                f"{dash(unicode_ok)} live updates stream in as hosts commit")
+        safe_addstr(window, height - 2, 1, clip(text, width - 2, unicode_ok=unicode_ok), width - 2,
                     attr(styles, "scan_running"), unicode_ok=unicode_ok)
     else:
         text = "Ready. Nmap is not launched from this view; use the CLI scan command."
-        safe_addstr(window, height - 2, 1, clip(text, width - 2), width - 2,
+        safe_addstr(window, height - 2, 1, clip(text, width - 2, unicode_ok=unicode_ok), width - 2,
                     attr(styles, "muted"), unicode_ok=unicode_ok)
 
     hints = (
@@ -201,35 +204,32 @@ def draw_hosts_screen(
         border_attr=attr(styles, "border_focus"), title_attr=attr(styles, "title"),
         unicode_ok=unicode_ok, focused=True,
     )
-    widths = (12, min(26, max(14, iw // 3)), min(28, max(12, iw // 4)), 7, 7)
-    heading = (
-        pad("KIND", widths[0], unicode_ok=unicode_ok)
-        + pad("LABEL", widths[1], unicode_ok=unicode_ok)
-        + pad("ADDRESS", widths[2], unicode_ok=unicode_ok)
-        + pad("PORTS", widths[3], unicode_ok=unicode_ok)
-        + pad("REVIEW", widths[4], unicode_ok=unicode_ok)
+    widths = (16, min(26, max(14, iw // 3)), min(30, max(12, iw // 4)), 6, 6)
+    heading = " ".join(
+        pad(cell, width, unicode_ok=unicode_ok)
+        for cell, width in zip(("KIND", "LABEL", "ADDRESS", "PORTS", "REVIEW"), widths)
     )
-    safe_addstr(window, itop, ileft, clip(heading, iw), iw, attr(styles, "tab_active"),
-                unicode_ok=unicode_ok)
+    safe_addstr(window, itop, ileft, clip(heading, iw, unicode_ok=unicode_ok), iw,
+                attr(styles, "tab_active"), unicode_ok=unicode_ok)
     visible = max(1, ih - 1)
     start = max(0, min(state.selected - visible // 2, max(0, len(snapshot.nodes) - visible)))
     for offset, node in enumerate(snapshot.nodes[start:start + visible]):
         index = start + offset
         prefix = "▶" if index == state.selected and unicode_ok else ">" if index == state.selected else " "
         row = f"{prefix}{status_icon(node.kind, unicode_ok)} {node.kind}"
-        text = (
-            pad(row, widths[0], unicode_ok=unicode_ok)
-            + pad(node.label, widths[1], unicode_ok=unicode_ok)
-            + pad(", ".join(node.addresses) if node.addresses else "—", widths[2], unicode_ok=unicode_ok)
-            + pad(str(node.open_ports), widths[3], unicode_ok=unicode_ok)
-            + pad(str(node.review_count) if node.review_count else "·", widths[4], unicode_ok=unicode_ok)
+        cells = (
+            row,
+            node.label,
+            ", ".join(node.addresses) if node.addresses else dash(unicode_ok),
+            str(node.open_ports),
+            str(node.review_count) if node.review_count else "·",
         )
+        text = " ".join(pad(cell, width, unicode_ok=unicode_ok) for cell, width in zip(cells, widths))
         style_name = "selected" if index == state.selected else _KIND_STYLE.get(node.kind, "label")
-        safe_addstr(window, itop + 1 + offset, ileft, clip(text, iw), iw,
+        if node.review_count and index != state.selected:
+            style_name = "error"
+        safe_addstr(window, itop + 1 + offset, ileft, clip(text, iw, unicode_ok=unicode_ok), iw,
                     attr(styles, style_name), unicode_ok=unicode_ok)
-        if node.review_count and iw > 2:
-            safe_addstr(window, itop + 1 + offset, ileft + iw - 1, "!", 1,
-                        attr(styles, "error"), unicode_ok=unicode_ok)
     if not snapshot.nodes:
         safe_addstr(window, itop + 1, ileft, "No hosts recorded yet.", iw,
                     attr(styles, "muted"), unicode_ok=unicode_ok)
@@ -270,15 +270,15 @@ def draw_scans_screen(
         + pad("ELAPSED", widths[4], unicode_ok=unicode_ok)
         + "TARGETS"
     )
-    safe_addstr(window, itop, ileft, clip(heading, iw), iw, attr(styles, "tab_active"),
-                unicode_ok=unicode_ok)
+    safe_addstr(window, itop, ileft, clip(heading, iw, unicode_ok=unicode_ok), iw,
+                attr(styles, "tab_active"), unicode_ok=unicode_ok)
     now = time.monotonic()
     for offset, scan in enumerate(scans[start:start + visible]):
         index = start + offset
         running = scan.status == "running"
         icon = spinner(now, unicode_ok) if running else scan_icon(scan.status, unicode_ok)
         duration = elapsed(scan.started_at, scan.ended_at) + ("…" if running and unicode_ok else "")
-        targets = ", ".join(scan.targets[:4]) or "—"
+        targets = ", ".join(scan.targets[:4]) or dash(unicode_ok)
         text = (
             pad(f" {icon}", widths[0], unicode_ok=unicode_ok)
             + pad(scan.short_id, widths[1], unicode_ok=unicode_ok)
@@ -289,7 +289,7 @@ def draw_scans_screen(
         )
         selected = index == state.scan_selected
         style_name = "selected" if selected else f"scan_{scan.status}"
-        safe_addstr(window, itop + 1 + offset, ileft, clip(text, iw), iw,
+        safe_addstr(window, itop + 1 + offset, ileft, clip(text, iw, unicode_ok=unicode_ok), iw,
                     attr(styles, style_name, attr(styles, "label")), unicode_ok=unicode_ok)
         if running and iw > 14:
             progress = 0.15 + 0.7 * (0.5 + 0.5 * math.sin(now * 2.0))
@@ -299,12 +299,12 @@ def draw_scans_screen(
     if detail_row > itop + min(len(scans), visible) + 1:
         scan = scans[state.scan_selected]
         detail = (
-            f"{scan.status}  {scan.short_id}  {scan.operator or 'operator —'}  "
-            f"if {scan.interface or '—'}  nmap {scan.nmap_version or '—'}  "
-            f"exit {scan.exit_code if scan.exit_code is not None else '—'}  "
+            f"{scan.status}  {scan.short_id}  {scan.operator or 'operator ' + dash(unicode_ok)}  "
+            f"if {scan.interface or dash(unicode_ok)}  nmap {scan.nmap_version or dash(unicode_ok)}  "
+            f"exit {scan.exit_code if scan.exit_code is not None else dash(unicode_ok)}  "
             f"started {short_time(scan.started_at)}"
         )
-        safe_addstr(window, detail_row, ileft, clip(detail, iw), iw,
+        safe_addstr(window, detail_row, ileft, clip(detail, iw, unicode_ok=unicode_ok), iw,
                     attr(styles, "muted"), unicode_ok=unicode_ok)
     return FrameLayout(tab_ranges(), None)
 

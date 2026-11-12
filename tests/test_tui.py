@@ -4,6 +4,7 @@ import fcntl
 import io
 import os
 import pty
+import re
 import select
 import signal
 import struct
@@ -26,6 +27,14 @@ from lumos.tui.app import _draw_map, run_tui
 ROOT = Path(__file__).resolve().parents[1]
 FAKE = ROOT / "tests" / "fake_nmap" / "nmap"
 FIXTURE = ROOT / "tests" / "fixtures" / "nmap" / "normal.xml"
+
+# The TUI styles each header segment, so curses inserts escape sequences mid-line.
+_ANSI = re.compile(rb"\x1b\[[0-9;?]*[A-Za-z]|\x1b\([AB0]|\x1b[=>]|\r")
+
+
+def _plain(buffer: bytearray) -> bytes:
+    """Terminal output with escape sequences and carriage returns removed."""
+    return _ANSI.sub(b"", bytes(buffer))
 
 
 class RecordingWindow:
@@ -134,7 +143,7 @@ class TuiTests(unittest.TestCase):
             fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 28, 100, 0, 0))
 
             def read_until(needle: bytes, timeout: float = 6.0) -> bool:
-                if needle in output:
+                if needle in _plain(output):
                     return True
                 deadline = time.monotonic() + timeout
                 while time.monotonic() < deadline:
@@ -148,7 +157,7 @@ class TuiTests(unittest.TestCase):
                     if not chunk:
                         return False
                     output.extend(chunk)
-                    if needle in output:
+                    if needle in _plain(output):
                         return True
                 return False
 
@@ -241,7 +250,11 @@ class TuiTests(unittest.TestCase):
                         output.extend(os.read(master, 8192))
                     except OSError:
                         break
-            self.assertIn(b"\xe2\xa0", output, f"no braille cells in curses output: {bytes(output[-1000:])!r}")
+            decoded = _plain(output).decode("utf-8", "replace")
+            self.assertTrue(
+                any(0x2800 <= ord(char) <= 0x28FF for char in decoded),
+                f"no braille cells in curses output: {bytes(output[-1000:])!r}",
+            )
             os.write(master, b"q")
             deadline = time.monotonic() + 5.0
             while time.monotonic() < deadline:
@@ -288,7 +301,7 @@ class TuiTests(unittest.TestCase):
             fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 28, 100, 0, 0))
 
             def read_until(needle: bytes, timeout: float = 5.0) -> bool:
-                if needle in output:
+                if needle in _plain(output):
                     return True
                 deadline = time.monotonic() + timeout
                 while time.monotonic() < deadline:
@@ -302,14 +315,14 @@ class TuiTests(unittest.TestCase):
                     if not chunk:
                         return False
                     output.extend(chunk)
-                    if needle in output:
+                    if needle in _plain(output):
                         return True
                 return False
 
             self.assertTrue(read_until(b"LUMOS  MAP"), "initial map view did not render")
             os.write(master, b"e")
-            self.assertTrue(read_until(b"EDGE DETAILS"), "e key did not select edge provenance details")
-            self.assertTrue(read_until(b"Confidence:"), f"edge confidence was not rendered; bytes={bytes(output[-1500:])!r}")
+            self.assertTrue(read_until(b"EDGE"), "e key did not select edge provenance details")
+            self.assertTrue(read_until(b"CONFIDENCE"), f"edge confidence was not rendered; bytes={bytes(output[-1500:])!r}")
             os.write(master, b"v")
             self.assertTrue(read_until(b"HOSTS  |  terminal smoke"), f"v key did not open host list; terminal bytes: {bytes(output[-2000:])!r}")
             os.write(master, b"q")

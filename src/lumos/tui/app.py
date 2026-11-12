@@ -263,6 +263,12 @@ def _run_curses(window: Any, database: Path) -> None:
         curses.curs_set(0)
     except curses.error:
         pass
+    try:
+        # A lone Escape must close overlays immediately instead of waiting out
+        # curses' default one-second escape-sequence delay.
+        curses.set_escdelay(25)
+    except (AttributeError, curses.error):
+        pass
     capability = theme.detect_capability()
     theme_name = _initial_theme(capability)
     styles = theme.init_styles(theme_name, capability)
@@ -307,6 +313,7 @@ def _run_event_loop(
             dirty = True
         if key == -1:
             continue
+        dirty = True
         if key == curses.KEY_RESIZE:
             window.clearok(True)
             dirty = True

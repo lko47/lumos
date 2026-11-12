@@ -18,6 +18,11 @@ def display_width(text: str) -> int:
                0 if unicodedata.combining(char) else 1 for char in text)
 
 
+def dash(unicode_ok: bool = True) -> str:
+    """Placeholder for a missing value that degrades on ASCII terminals."""
+    return "—" if unicode_ok else "-"
+
+
 def clip(text: str, width: int, *, unicode_ok: bool = True) -> str:
     """Clip to ``width`` columns, adding an ellipsis when truncated."""
     if width <= 0:

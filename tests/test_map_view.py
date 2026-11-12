@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import socket
 import tempfile
 import unittest
 from pathlib import Path
@@ -59,6 +60,33 @@ class MapSnapshotTests(unittest.TestCase):
         self.assertTrue(device.addresses)
         self.assertGreater(device.open_ports, 0)
         self.assertGreater(snapshot.review_items, 0)
+        # Open ports are carried per node so the sidebar can list them; the
+        # fixture's 443 is filtered and must not appear.
+        self.assertEqual(device.ports, ("22/tcp",))
+        self.assertIsInstance(device.review_count, int)
+        self.assertGreaterEqual(device.review_count, 0)
+
+        # The scan panel reads a dedicated projection of the scans table.
+        self.assertEqual(len(snapshot.scans_detail), 1)
+        scan = snapshot.scans_detail[0]
+        self.assertEqual(scan.status, "completed")
+        self.assertEqual(scan.targets, ("192.0.2.10",))
+        self.assertEqual(scan.exit_code, 0)
+        self.assertEqual(scan.operator, "test")
+        self.assertEqual(scan.hosts, 1)
+        self.assertIn("7.99", scan.nmap_version)
+        self.assertEqual(scan.short_id, scan.id[:8])
+
+        # The scanner root records the vantage label and any saved interfaces.
+        self.assertEqual(snapshot.root_label, socket.gethostname())
+        self.assertEqual(snapshot.root_interfaces, ())
+
+    def test_empty_engagement_has_no_scan_detail_or_vantage(self) -> None:
+        snapshot = load_map_snapshot(self.db)
+        self.assertEqual(snapshot.scans_detail, ())
+        self.assertEqual(snapshot.root_label, "")
+        self.assertEqual(snapshot.root_interfaces, ())
+        self.assertEqual(snapshot.nodes[0].ports, ())
 
     def test_node_bound_does_not_return_edges_to_hidden_nodes(self) -> None:
         add_scope_rule(self.db, "lab", "192.0.2.0/24", included=True, author="test")

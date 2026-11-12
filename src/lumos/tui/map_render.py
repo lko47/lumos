@@ -9,6 +9,7 @@ from .braille import BrailleCanvas
 from .layout import compute_layout
 from .widgets import (
     clip,
+    dash,
     display_width,
     draw_box,
     draw_meter,
@@ -198,6 +199,22 @@ def draw_map_panel(
     selected_node = snapshot.nodes[state.selected] if (
         state.selected_kind == "node" and 0 <= state.selected < len(snapshot.nodes)
     ) else None
+    occupied: dict[int, list[tuple[int, int]]] = {}
+
+    def place(y: int, x: int, width: int) -> int | None:
+        """Find a free span on row ``y``; labels never overwrite each other."""
+        spans = sorted(occupied.get(y, []))
+        for start, end in spans:
+            if x < end and x + width > start:
+                right = end
+                if right + width <= iw and all(right + width <= s or right >= e for s, e in spans):
+                    return right
+                left = start - width
+                if left >= 0 and all(left + width <= s or left >= e for s, e in spans):
+                    return left
+                return None
+        return x
+
     for index, node in enumerate(snapshot.nodes):
         point = projected.get(node.id)
         if point is None or not (0 <= point[0] < iw and 0 <= point[1] < ih):
@@ -206,22 +223,29 @@ def draw_map_panel(
         selected = selected_node is not None and index == state.selected
         prefix = "▶" if selected and unicode_ok else ">" if selected else " "
         label = clip(node.label, max(4, min(22, iw - 4)), unicode_ok=unicode_ok)
-        text = f"{prefix}{marker} {label}"
+        flag = "!" if node.review_count else ""
+        marker_text = f"{prefix}{marker}{flag}"
+        text = f"{marker_text} {label}"
         x = max(0, min(iw - 1, point[0] - len(text) // 2))
+        placed = place(point[1], x, len(text))
+        if placed is None:
+            text = marker_text
+            x = max(0, min(iw - 1, point[0] - len(marker_text) // 2))
+        else:
+            x = placed
+        occupied.setdefault(point[1], []).append((x, x + len(text)))
         style_name = "selected" if selected else (
+            "error" if node.review_count else
             "root" if node.kind == "root" else
             "device" if node.kind == "device" else
             "unknown_hop" if node.kind == "unknown_hop" else
             "manual" if node.kind == "manual" else
             "zone" if node.kind == "zone" else "hop"
         )
-        safe_addstr(window, itop + point[1], ileft + x, clip(text, iw - x), iw - x,
-                    _attr(styles, style_name), unicode_ok=unicode_ok)
-        if node.review_count and point[0] + 1 < iw:
-            safe_addstr(window, itop + point[1], ileft + min(iw - 1, point[0] + 1), "!",
-                        1, _attr(styles, "error"), unicode_ok=unicode_ok)
+        safe_addstr(window, itop + point[1], ileft + x, clip(text, iw - x, unicode_ok=unicode_ok),
+                    iw - x, _attr(styles, style_name), unicode_ok=unicode_ok)
     if not snapshot.nodes:
-        safe_addstr(window, itop, ileft, "No nodes yet — run a scan with the CLI.", iw,
+        safe_addstr(window, itop, ileft, f"No nodes yet {dash(unicode_ok)} run a scan with the CLI.", iw,
                     _attr(styles, "muted"), unicode_ok=unicode_ok)
     return projected, (itop, ileft, ih, iw)
 
@@ -264,11 +288,11 @@ def draw_sidebar(
     )
     if ih < 2 or iw < 4:
         return
-    sep = "│" if unicode_ok else "|"
 
     def line(row: int, text: str, style: str = "label") -> None:
         if 0 <= row < ih:
-            safe_addstr(window, itop + row, ileft, clip(text, iw), iw, _attr(styles, style),
+            safe_addstr(window, itop + row, ileft, clip(text, iw, unicode_ok=unicode_ok), iw,
+                        _attr(styles, style),
                         unicode_ok=unicode_ok)
 
     def field(row: int, label: str, value: str, style: str = "value") -> None:
@@ -284,15 +308,15 @@ def draw_sidebar(
         field(0, "type", edge.edge_type, "accent")
         field(1, "from", source.label if source else edge.from_node_id)
         field(2, "to", destination.label if destination else edge.to_node_id)
-        line(4, f"{sep} confidence", "muted")
+        line(4, "CONFIDENCE", "muted")
         draw_meter(window, itop + 5, ileft, iw, edge.confidence, styles,
                    unicode_ok=unicode_ok, empty_attr=_attr(styles, "muted"))
         line(6, f"{edge.confidence:.2f}", "value")
         field(8, "source", edge.source_kind)
-        field(9, "source id", edge.source_id or "—")
+        field(9, "source id", edge.source_id or dash(unicode_ok))
         field(11, "first seen", short_time(edge.first_observed_at))
         field(12, "confirmed", short_time(edge.last_confirmed_at) if edge.last_confirmed_at else "not confirmed")
-        field(14, "author", edge.author or "—")
+        field(14, "author", edge.author or dash(unicode_ok))
         return
 
     node = snapshot.nodes[state.selected] if 0 <= state.selected < len(snapshot.nodes) else None
@@ -302,25 +326,27 @@ def draw_sidebar(
     line(0, f"{status_icon(node.kind, unicode_ok)} {node.kind.upper()}", "accent")
     line(1, node.label, "value")
     row = 3
-    line(row, f"{sep} addresses", "muted")
+    line(row, "ADDRESSES", "muted")
     row += 1
-    for address in node.addresses[:3] or ("—",):
+    for address in node.addresses[:3] or (dash(unicode_ok),):
         line(row, address, "label")
         row += 1
     if node.os_name:
         field(row, "os", node.os_name)
         row += 1
     if node.kind == "root":
-        line(row + 1, f"{sep} vantage", "muted")
+        line(row + 1, "VANTAGE", "muted")
         row += 2
-        for interface in snapshot.root_interfaces[:6] or ("not saved — lumos interfaces --save",):
+        for interface in snapshot.root_interfaces[:6] or (
+            f"not saved {dash(unicode_ok)} lumos interfaces --save",
+        ):
             line(row, interface, "label")
             row += 1
         field(row + 1, "scans", str(snapshot.scans))
         field(row + 2, "active", str(snapshot.active_scans),
               "scan_running" if snapshot.active_scans else "value")
         return
-    line(row + 1, f"{sep} open ports  {node.open_ports}", "muted")
+    line(row + 1, f"OPEN PORTS  {node.open_ports}", "muted")
     draw_meter(window, itop + row + 2, ileft, iw, min(1.0, node.open_ports / 20.0), styles,
                unicode_ok=unicode_ok, empty_attr=_attr(styles, "muted"))
     row += 3

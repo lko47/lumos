@@ -243,8 +243,10 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
                 ):
                     name = sanitize_text(interface[0], max_chars=32)
                     address = sanitize_text(interface[1], max_chars=64)
-                    if address:
-                        root_interfaces.append(f"{name} {address}" if name else address)
+                    if name and address:
+                        root_interfaces.append(f"{name} {address}")
+                    elif name or address:
+                        root_interfaces.append(name or address)
         scans_detail: list[ScanInfo] = []
         for row in conn.execute(
             "SELECT s.id, s.status, s.targets_json, s.started_at, COALESCE(s.ended_at, ''), "
@@ -273,7 +275,7 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
                     exit_code=row[5],
                     operator=sanitize_text(row[6], max_chars=64),
                     interface=sanitize_text(row[7], max_chars=32),
-                    nmap_version=sanitize_text(row[8], max_chars=32),
+                    nmap_version=sanitize_text(row[8], max_chars=64),
                     hosts=int(row[9] or 0),
                 )
             )
