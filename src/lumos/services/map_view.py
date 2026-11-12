@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..core.database import DatabaseError, open_database
+from ..core.evidence import classify
 from ..core.text import sanitize_text
 
 # A hub with more members than this is drawn as one node with a count; asking
@@ -61,15 +62,7 @@ def edge_class(edge: MapEdge) -> str:
     (dense dots), below that is "weak" (sparse dots). A guess can therefore
     never take a solid line.
     """
-    if edge.edge_type == "local":
-        return "local"
-    if edge.edge_type == "manual":
-        return "manual"
-    if edge.edge_type == "alternate":
-        return "alternate"
-    if edge.edge_type == "inferred":
-        return "likely" if edge.confidence >= 0.6 else "weak"
-    return "observed"
+    return classify(edge.edge_type, edge.confidence)
 
 
 @dataclass(frozen=True)

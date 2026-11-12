@@ -114,8 +114,15 @@ status bar carries a one-line legend that degrades to ASCII.
 A hub with more than 50 members collapses: its member nodes and links are not
 selected at all, so a 100,000-host engagement of 400 `/24` networks opens as 401
 nodes and draws a frame in ~28 ms (benchmark below). Expanding a collapsed hub
-on request, the link evidence panel, promote/reject keys and dotted SVG report
-output are not implemented yet.
+on request, the link evidence panel and the promote/reject keys are not
+implemented yet.
+
+Reports tell the same truth as the map. `lumos report markdown` lists inferred
+links in their own table with rule and confidence and states that they were not
+measured; `lumos report svg DATABASE OUT.svg` draws them dotted (three-on/two-off
+for likely, one-on/five-off for weak) while measured and local links stay solid,
+labels hubs with their CIDR and member count, and repeats the caveat in the
+image and its description.
 
 ## Development status and project hygiene
 

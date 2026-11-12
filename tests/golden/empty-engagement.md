@@ -28,6 +28,10 @@ No hosts observed.
 
 No topology edges recorded.
 
+## Inferred links (not measured)
+
+No inferred links: every recorded link was measured.
+
 ## Review queue
 
 No review items.

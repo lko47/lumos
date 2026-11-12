@@ -1,13 +1,16 @@
-"""Markdown report generation using the standard library only."""
+"""Markdown and SVG report generation using the standard library only."""
 
 from __future__ import annotations
 
+import hashlib
+import math
 import os
 import re
 from pathlib import Path
 from typing import Iterator
 
 from .database import open_database
+from .evidence import SVG_STYLE, classify
 from .text import sanitize_text
 
 
@@ -137,6 +140,30 @@ def iter_markdown_report(database_path: str | Path) -> Iterator[str]:
         if not any_edge:
             yield "No topology edges recorded.\n"
 
+        yield "\n## Inferred links (not measured)\n\n"
+        inferred = conn.execute(
+            "SELECT a.label, b.label, e.source_kind, e.confidence "
+            "FROM topology_edges e JOIN topology_nodes a ON a.id = e.from_node_id "
+            "JOIN topology_nodes b ON b.id = e.to_node_id "
+            "WHERE e.engagement_id = ? AND e.edge_type = 'inferred' "
+            "ORDER BY e.confidence DESC, a.label, b.label",
+            (engagement_id,),
+        ).fetchall()
+        if inferred:
+            yield (
+                "Inferred links are derived from host addressing and the scanner's own interface "
+                "and routing tables. They were not measured. The SVG report draws them dotted; "
+                "solid lines are measurements.\n\n"
+            )
+            yield "| From | To | Rule | Confidence |\n| --- | --- | --- | --- |\n"
+            for row in inferred:
+                rule = str(row[2] or "").removeprefix("rule:")
+                yield (
+                    f"| {_code(row[0])} | {_code(row[1])} | {_code(rule)} | {row[3]:.2f} |\n"
+                )
+        else:
+            yield "No inferred links: every recorded link was measured.\n"
+
         yield "\n## Review queue\n\n"
         reviews = conn.execute(
             "SELECT r.target_kind, r.target_id, r.reason_code, r.reason_detail, "
@@ -207,3 +234,189 @@ def write_markdown_report(database_path: str | Path, output_path: str | Path) ->
         output.chmod(0o600)
     except OSError:
         pass
+
+
+def _svg_escape(value: object) -> str:
+    text = str(value if value is not None else "")
+    return (
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def _ring_positions(nodes, edges, width: int, height: int) -> dict[str, tuple[float, float]]:
+    """Deterministic radial placement: hop distance sets the ring, id sets the angle."""
+    ids = [row[0] for row in nodes]
+    adjacency: dict[str, set[str]] = {node_id: set() for node_id in ids}
+    for edge in edges:
+        if edge[0] in adjacency and edge[1] in adjacency and edge[0] != edge[1]:
+            adjacency[edge[0]].add(edge[1])
+            adjacency[edge[1]].add(edge[0])
+    roots = [row[0] for row in nodes if row[1] == "root"] or ids[:1]
+    distance: dict[str, int] = {root: 0 for root in roots}
+    queue = list(roots)
+    while queue:
+        current = queue.pop(0)
+        for neighbour in sorted(adjacency[current]):
+            if neighbour not in distance:
+                distance[neighbour] = distance[current] + 1
+                queue.append(neighbour)
+    max_distance = max(distance.values(), default=0) or 1
+    centre_x, centre_y = width / 2, height / 2
+    max_radius = min(width, height) / 2 - 70
+    positions: dict[str, tuple[float, float]] = {}
+    for row in nodes:
+        node_id = row[0]
+        if node_id in roots:
+            positions[node_id] = (centre_x, centre_y)
+            continue
+        depth = distance.get(node_id, max_distance)
+        digest = hashlib.sha1(node_id.encode("utf-8")).digest()
+        angle = (int.from_bytes(digest[:4], "big") / 0xFFFFFFFF) * math.tau
+        radius = (max_radius / max_distance) * depth
+        positions[node_id] = (
+            centre_x + math.cos(angle) * radius,
+            centre_y + math.sin(angle) * radius * 0.72,
+        )
+    return positions
+
+
+def iter_svg_report(
+    database_path: str | Path, *, width: int = 1200, height: int = 800
+) -> Iterator[str]:
+    """Yield an SVG map where dotted lines mean inferred, never measured."""
+    conn = open_database(database_path, readonly=True)
+    try:
+        engagement = conn.execute("SELECT id, name FROM engagement LIMIT 1").fetchone()
+        if engagement is None:
+            raise ValueError("Database has no engagement")
+        engagement_id, name = engagement
+        nodes = conn.execute(
+            "SELECT tn.id, tn.kind, tn.label, tn.entity_id, "
+            "(SELECT COUNT(*) FROM zone_memberships zm WHERE tn.kind = 'zone' AND zm.zone_id = tn.entity_id) "
+            "FROM topology_nodes tn WHERE tn.engagement_id = ? ORDER BY tn.id",
+            (engagement_id,),
+        ).fetchall()
+        edges = conn.execute(
+            "SELECT e.from_node_id, e.to_node_id, e.edge_type, e.confidence, e.source_kind "
+            "FROM topology_edges e WHERE e.engagement_id = ? ORDER BY e.id",
+            (engagement_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    positions = _ring_positions(nodes, edges, width, height)
+    yield f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
+    yield f'viewBox="0 0 {width} {height}" role="img" aria-label="Lumos topology map">\n'
+    yield "<title>Lumos topology map</title>\n"
+    yield (
+        "<desc>Solid lines are measured or local links. Dotted lines are inferred from "
+        "addressing and the scanner routing table and were not measured.</desc>\n"
+    )
+    yield '<rect width="100%" height="100%" fill="#10131a"/>\n'
+    yield (
+        f'<text x="24" y="34" fill="#e6edf3" font-family="monospace" font-size="18">'
+        f'{_svg_escape(name)}</text>\n'
+    )
+    yield (
+        '<text x="24" y="56" fill="#8b949e" font-family="monospace" font-size="12">'
+        'solid: measured or local  ·  dotted: inferred, not measured</text>\n'
+    )
+
+    for from_id, to_id, edge_type, confidence, source_kind in edges:
+        start = positions.get(from_id)
+        end = positions.get(to_id)
+        if start is None or end is None:
+            continue
+        style = classify(edge_type, confidence)
+        stroke_width, dash, colour = SVG_STYLE[style]
+        dash_attr = f' stroke-dasharray="{dash}"' if dash else ""
+        yield (
+            f'<line x1="{start[0]:.1f}" y1="{start[1]:.1f}" x2="{end[0]:.1f}" y2="{end[1]:.1f}" '
+            f'stroke="{colour}" stroke-width="{stroke_width}"{dash_attr} '
+            f'stroke-linecap="round"><title>{_svg_escape(style)} link '
+            f'({_svg_escape(str(source_kind).removeprefix("rule:"))}, confidence {confidence:.2f})'
+            f'</title></line>\n'
+        )
+        if style == "manual":
+            mid_x, mid_y = (start[0] + end[0]) / 2, (start[1] + end[1]) / 2
+            yield (
+                f'<text x="{mid_x:.1f}" y="{mid_y:.1f}" fill="{colour}" font-family="monospace" '
+                f'font-size="10" text-anchor="middle">M</text>\n'
+            )
+
+    # Labels sit outside the ring (away from the centre) and are nudged apart
+    # vertically so a report never stacks two hostnames on one another.
+    occupied: dict[str, list[tuple[float, float]]] = {"left": [], "right": []}
+    centre_x = width / 2
+    for node_id, kind, label, entity_id, members in nodes:
+        point = positions.get(node_id)
+        if point is None:
+            continue
+        x, y = point
+        text = _svg_escape(label)
+        if kind == "zone":
+            size = 9
+            yield (
+                f'<polygon points="{x:.1f},{y - size:.1f} {x + size:.1f},{y:.1f} '
+                f'{x:.1f},{y + size:.1f} {x - size:.1f},{y:.1f}" fill="none" '
+                f'stroke="#c9a0ff" stroke-width="1.6"><title>hub {text}</title></polygon>\n'
+            )
+            caption = f"{text} · {members}" if members else text
+        elif kind == "root":
+            yield (
+                f'<rect x="{x - 8:.1f}" y="{y - 8:.1f}" width="16" height="16" fill="none" '
+                f'stroke="#f2f2f2" stroke-width="2"><title>scanner root</title></rect>\n'
+            )
+            caption = text
+        elif kind == "unknown_hop" and str(entity_id or "").startswith("gateway:"):
+            yield (
+                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6" fill="none" stroke="#8b949e" '
+                f'stroke-width="1.4"><title>placeholder gateway</title></circle>\n'
+            )
+            caption = text
+        else:
+            yield (
+                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6" fill="#7fd1ff" fill-opacity="0.85">'
+                f'<title>{text}</title></circle>\n'
+            )
+            caption = text
+
+        side = "right" if x >= centre_x else "left"
+        anchor_x = x + 12 if side == "right" else x - 12
+        anchor = "start" if side == "right" else "end"
+        label_y = y + 4
+        while any(
+            abs(label_y - other_y) < 13 and abs(anchor_x - other_x) < 150
+            for other_x, other_y in occupied[side]
+        ):
+            label_y += 13
+        occupied[side].append((anchor_x, label_y))
+        yield (
+            f'<text x="{anchor_x:.1f}" y="{label_y:.1f}" fill="#c9d1d9" font-family="monospace" '
+            f'font-size="10" text-anchor="{anchor}">{_svg_escape(caption)}</text>\n'
+        )
+
+    yield (
+        f'<text x="24" y="{height - 20}" fill="#8b949e" font-family="monospace" font-size="11">'
+        'Inferred links come from addressing and the scanner\u2019s routing table; '
+        'they are not measurements.</text>\n'
+    )
+    yield "</svg>\n"
+
+
+def write_svg_report(
+    database_path: str | Path,
+    output_path: str | Path,
+    *,
+    width: int = 1200,
+    height: int = 800,
+) -> None:
+    """Write an owner-only SVG map report, refusing to follow a symlink."""
+    target = Path(output_path)
+    if target.is_symlink():
+        raise ValueError(f"Refusing to write through a symlink: {target}")
+    payload = "".join(iter_svg_report(database_path, width=width, height=height))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(payload, encoding="utf-8")
+    target.chmod(0o600)

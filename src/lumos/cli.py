@@ -22,7 +22,7 @@ from .core.database import (
 )
 from .core.nmap.iflist import discover_interfaces
 from .core.nmap.runner import NmapRunnerError
-from .core.reports import write_markdown_report
+from .core.reports import write_markdown_report, write_svg_report
 from .core.scanning import ScopeConfirmationRequired, scan_database
 from .core.scan_store import ScanStoreError
 from .core.vantage_store import save_interfaces
@@ -110,6 +110,13 @@ def _parser() -> argparse.ArgumentParser:
     markdown = report_commands.add_parser("markdown", help="write a Markdown report")
     markdown.add_argument("database", type=Path)
     markdown.add_argument("output", type=Path)
+    svg = report_commands.add_parser(
+        "svg", help="write an SVG topology map (dotted links are inferred)"
+    )
+    svg.add_argument("database", type=Path)
+    svg.add_argument("output", type=Path)
+    svg.add_argument("--width", type=int, default=1200)
+    svg.add_argument("--height", type=int, default=800)
     return parser
 
 
@@ -270,6 +277,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             from .tui.app import run_tui
 
             return run_tui(args.database)
+        if args.command == "report" and args.report_format == "svg":
+            write_svg_report(args.database, args.output, width=args.width, height=args.height)
+            print(f"Wrote {args.output}")
+            return 0
         if args.command == "report" and args.report_format == "markdown":
             write_markdown_report(args.database, args.output)
             print(f"Wrote Markdown report to {args.output}")
