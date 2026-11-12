@@ -8,7 +8,8 @@ import unittest
 from pathlib import Path
 
 from lumos.core import ids
-from lumos.core.database import initialize_database, open_database, utc_now
+from lumos.core import schema
+from lumos.core.database import initialize_database, open_database, upgrade_database, utc_now
 from lumos.core.inference import rebuild_inferred
 from lumos.services.map_view import load_hub_members, load_map_snapshot
 from lumos.core.nmap.iflist import InterfaceEntry, InterfaceSnapshot, RouteEntry
@@ -370,6 +371,110 @@ class InferenceTests(unittest.TestCase):
         self.assertIn("user-zone", remaining)
         self.assertNotIn("stale-hub", remaining)
 
+
+class MigrationTests(unittest.TestCase):
+    def test_schema_two_star_edges_become_explainable_hubs(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        db = Path(tmp.name) / "legacy.sqlite"
+        # Build a genuine schema-2 file the way the old code did.
+        raw = sqlite3.connect(db)
+        try:
+            raw.executescript(schema._MIGRATION_1)
+            raw.execute(f"PRAGMA application_id = {schema.APPLICATION_ID}")
+            raw.execute("PRAGMA user_version = 1")
+            raw.executescript(schema._MIGRATION_2)
+            raw.execute("PRAGMA user_version = 2")
+            now = utc_now()
+            raw.execute(
+                "INSERT INTO engagement(id, name, client, operator, created_at) VALUES ('e', 'legacy', '', '', ?)",
+                (now,),
+            )
+            raw.execute(
+                "INSERT INTO networks(id, engagement_id, name, cidr, family, notes, created_at) "
+                "VALUES ('n', 'e', 'lab', NULL, NULL, '', ?)",
+                (now,),
+            )
+            raw.execute(
+                "INSERT INTO topology_nodes(id, engagement_id, kind, entity_id, label, created_at) "
+                "VALUES ('root', 'e', 'root', 'v', 'scanner', ?)",
+                (now,),
+            )
+            raw.execute(
+                "INSERT INTO vantage_points(id, engagement_id, scanner_name, operator, created_at) "
+                "VALUES ('v', 'e', 'scanner-a', 'analyst', ?)",
+                (now,),
+            )
+            raw.execute(
+                "INSERT INTO vantage_interfaces(id, vantage_point_id, name, address, mac, is_up, captured_at) "
+                "VALUES ('i', 'v', 'eth0', '192.0.2.32/24', '', 1, ?)",
+                (now,),
+            )
+            raw.execute(
+                "INSERT INTO scans(id, engagement_id, vantage_point_id, exact_args_json, redacted_args_json, "
+                "targets_json, nmap_version, interface, operator, started_at, exit_code, status) "
+                "VALUES ('s', 'e', 'v', '[]', '[]', '{}', '7.98', 'eth0', 'analyst', ?, 0, 'completed')",
+                (now,),
+            )
+            raw.execute(
+                "INSERT INTO devices(id, engagement_id, created_at) VALUES ('d', 'e', ?)", (now,)
+            )
+            raw.execute(
+                "INSERT INTO host_observations(id, scan_id, device_id, observed_at, reachability, "
+                "discovery_method, hostname, os_name, mac_vendor, raw_host_json) "
+                "VALUES ('o', 's', 'd', ?, 'up', 'arp-response', 'legacy-host', '', '', '{}')",
+                (now,),
+            )
+            raw.execute(
+                "INSERT INTO addresses(id, network_id, kind, normalized_value, display_value, created_at) "
+                "VALUES ('a', 'n', 'ipv4', '192.0.2.10', '192.0.2.10', ?)",
+                (now,),
+            )
+            raw.execute(
+                "INSERT INTO observation_addresses(host_observation_id, address_id, role) VALUES ('o', 'a', 'ipv4')"
+            )
+            raw.execute(
+                "INSERT INTO topology_nodes(id, engagement_id, kind, entity_id, label, created_at) "
+                "VALUES ('host', 'e', 'device', 'd', '192.0.2.10', ?)",
+                (now,),
+            )
+            raw.execute(
+                "INSERT INTO topology_edges(id, engagement_id, from_node_id, to_node_id, edge_type, "
+                "source_kind, confidence, first_observed_at) VALUES ('star', 'e', 'root', 'host', "
+                "'inferred', 'inference', 0.35, ?)",
+                (now,),
+            )
+            raw.commit()
+        finally:
+            raw.close()
+
+        result = upgrade_database(db)
+        self.assertEqual(result["user_version"], 3)
+        conn = open_database(db, readonly=True)
+        try:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM topology_edges WHERE source_kind = 'inference'").fetchone()[0],
+                0,
+                "the old 0.35 star edge must not survive the migration",
+            )
+        finally:
+            conn.close()
+
+        stats = rebuild_inferred(db)
+        self.assertGreaterEqual(stats.hubs, 1)
+        edges = conn = open_database(db, readonly=True)
+        try:
+            rows = conn.execute(
+                "SELECT edge_type, source_kind, confidence, evidence_json FROM topology_edges"
+            ).fetchall()
+        finally:
+            conn.close()
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertEqual(row[0], "inferred")
+            self.assertTrue(row[1].startswith("rule:"))
+            self.assertNotAlmostEqual(row[2], 0.35)
+            self.assertTrue(row[3])
 
 class CollapseTests(unittest.TestCase):
     def setUp(self) -> None:
