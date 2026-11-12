@@ -22,6 +22,8 @@ venv/
 *.xml
 /engagements/
 /generated-reports/
+/reports/
+/lumos-log.txt
 !tests/fixtures/nmap/*.xml
 
 # Local/editor state.

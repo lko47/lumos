@@ -13,34 +13,47 @@ The project name is provisional. No game assets, names, or layouts are used.
 - Scan only authorized targets. Lumos checks targets against engagement-wide allow and exclude rules before starting Nmap. An out-of-scope override requires the exact displayed phrase and is recorded.
 - Nmap XML and imported databases are untrusted input. Protect engagement files with OS permissions, access controls, and disk encryption. Do not store credentials in notes or scan scripts.
 
-## Current status: Phase 3 in progress
+## Current status: MVP interface (v0.2)
 
-Implemented: schema-v2 database creation, upgrade, and checks; scope rules; Nmap version discovery, safe argument-vector execution, streamed XML parsing and persistence; exact-hostname allowlisting before Nmap-based hostname resolution; scan audit/provenance and compressed raw XML evidence; bounded Nmap XML import; Markdown report; and a bounded, read-only map/host/scan TUI. `lumos tui DATABASE` opens curses on a terminal and prints an ASCII snapshot when output is redirected.
+Implemented: schema-v2 database creation, upgrade, and checks; scope rules; Nmap version discovery, safe argument-vector execution, streamed XML parsing and persistence; exact-hostname allowlisting before Nmap-based hostname resolution; scan audit/provenance and compressed raw XML evidence; bounded Nmap XML import; Markdown report; and a bounded, read-only map/host/scan TUI. Bare `lumos` opens the interface; `lumos DATABASE` opens that engagement, and the old `lumos tui DATABASE` still works. `LUMOS_DB` supplies a default database.
 
 The TUI has three tabs (`m` map, `v` hosts, `s` scans, `Tab` cycles), a durable keyboard identity, a command palette (`:`), a help overlay (`?`), incremental search (`/`), and manual refresh (`r`). The map draws only stored `topology_edges` (Nmap-observed or explicitly marked inferred), using a tested 2-by-4 Unicode braille rasterizer with per-edge-type patterns and an ASCII line fallback (`LUMOS_ASCII=1` forces it). Node placement is a deterministic ring layout keyed on a blake2b hash of the node id, so new discoveries never reshuffle existing nodes; the viewport supports zoom (`+`/`-`), pan (`H`/`J`/`K`/`L`), and reset (`0`). The detail sidebar lists addresses, OS, open ports per node, hop distance, review flags, and — for the scanner root — any vantage interfaces saved by `lumos interfaces --save`. Edge selection shows provenance, confidence, and timestamps. The scans tab lists recent scans with status, host counts, elapsed time, and targets, read from a bounded projection of the scans table.
 
-Colour is semantic rather than hard-coded: themes `aurora`, `ember`, and `matrix` degrade to 16-colour palettes, and `NO_COLOR` selects a monochrome theme that keeps hierarchy through weight and reverse video only. `LUMOS_THEME` selects the starting theme. While open, the TUI detects committed database changes from concurrent scans and refreshes the map/status; scan batches become visible after their SQLite commit. The standalone `lumos interfaces` command reads local interface and route information from the installed Nmap's `--iflist` option and provides text or JSON output; it does not scan targets. `lumos interfaces --save` records those interfaces on the engagement's vantage point. The TUI does not launch scans yet. The scan command displays the final Nmap command before execution. User-specified Nmap `-oN` and `-oG` output files are retained alongside Lumos's XML stream. An `-oX` or `-oA` manual option conflicts with XML-on-stdout and is rejected with an explanation.
+Colour is semantic rather than hard-coded: themes `aurora`, `ember`, and `matrix` degrade to 16-colour palettes, and `NO_COLOR` selects a monochrome theme that keeps hierarchy through weight and reverse video only. `LUMOS_THEME` selects the starting theme. While open, the TUI detects committed database changes from concurrent scans and refreshes the map/status; scan batches become visible after their SQLite commit. The standalone `lumos interfaces` command reads local interface and route information from the installed Nmap's `--iflist` option and provides text or JSON output; it does not scan targets. `lumos interfaces --save` records those interfaces on the engagement's vantage point. The TUI launches scans from the `S` form (preset, targets, network, interface, evidence) after a review step that shows the exact argv and the scope verdict; progress streams in a panel and `Esc` cancels. Creating a database (`N`), editing scope (`P`), importing XML (`I`), writing reports (`R`), database checks/upgrade/rebuild/merge/interfaces (`T`), and an event log (`!`) are all reachable from the map, and each is also a command in the `:` palette. The CLI and the interface call the same functions in `services/actions.py`, so both front ends behave identically. The **scan** command displays the final Nmap command before execution. User-specified Nmap `-oN` and `-oG` output files are retained alongside Lumos's XML stream. An `-oX` or `-oA` manual option conflicts with XML-on-stdout and is rejected with an explanation.
 
-The TUI remains a prototype: it watches committed snapshots rather than displaying streamed Nmap stderr/progress, and it does not yet save positions, support mouse interaction, edit topology, or provide review/notes panels. Idle CPU measured 0.02 s over a 5 s idle window (0.4% of one core) in a 110x32 PTY on Python 3.14.9; resize, colour, SSH, and tmux coverage and the Python 3.10 run are still outstanding. Merge, scan profiles/queue, comparisons, notes editor, manual topology editing, sanitization, synthetic demo generator, HTML/SVG/CSV/JSON exports, plugins, and performance benchmarks are not implemented. Do not treat Phase 3 as finished.
+The TUI remains a prototype: it watches committed snapshots rather than displaying streamed Nmap stderr/progress, and it does not yet save positions, support mouse interaction, edit topology, or provide review/notes panels. Idle CPU measured 0.02 s over a 5 s idle window (0.4% of one core) in a 110x32 PTY on Python 3.14.9; resize, colour, SSH, and tmux coverage and the Python 3.10 run are still outstanding. Scan profiles/queue, comparisons, a notes editor, manual topology editing, HTML/CSV/JSON exports, plugins, scheduling, and a config file beyond `LUMOS_DB` are not implemented. Ping-only (`-sn`) discovery is also not available: the runner accepts `-sS`, `-sT`, `-sU` and `-sV` only, so the interface's presets are connect, service, UDP and custom.
 
 Nmap progress flags are included only when the installed executable advertises them in its help output. The installed Nmap build used during development did not advertise `--stats-every`, so periodic Nmap progress may be unavailable on that build. Traceroute topology must not be inferred from the current default connect scan; Nmap documents that traceroute is incompatible with `-sT`.
 
 ## Quick start
 
-From a source checkout:
+```sh
+pipx install .        # or: python3 -m pip install --user .
+lumos                 # opens the interface; N creates the first engagement
+lumos engagement.sqlite
+```
+
+Everything below is also reachable from the interface; the CLI remains for
+scripting and for headless machines. From a source checkout, prefix each with
+`PYTHONPATH=src python3 -m`:
 
 ```sh
-PYTHONPATH=src python3 -m lumos interfaces --json
-PYTHONPATH=src python3 -m lumos db init ./engagement.sqlite --name "Example assessment"
-PYTHONPATH=src python3 -m lumos interfaces ./engagement.sqlite --save
-PYTHONPATH=src python3 -m lumos scope add ./engagement.sqlite 192.0.2.0/24 --network example --author analyst
-PYTHONPATH=src python3 -m lumos scope show ./engagement.sqlite
-PYTHONPATH=src python3 -m lumos scan ./engagement.sqlite 192.0.2.10 --network example
-PYTHONPATH=src python3 -m lumos import ./engagement.sqlite ./saved-scan.xml --network example
-PYTHONPATH=src python3 -m lumos report markdown ./engagement.sqlite ./assessment.md
-PYTHONPATH=src python3 -m lumos db check ./engagement.sqlite
-PYTHONPATH=src python3 -m lumos tui ./engagement.sqlite
+lumos interfaces --json
+lumos db init ./engagement.sqlite --name "Example assessment"
+lumos interfaces ./engagement.sqlite --save
+lumos scope add ./engagement.sqlite 192.0.2.0/24 --network example --author analyst
+lumos scope show ./engagement.sqlite
+lumos scan ./engagement.sqlite 192.0.2.10 --network example
+lumos import ./engagement.sqlite ./saved-scan.xml --network example
+lumos report markdown ./engagement.sqlite ./assessment.md
+lumos db merge ./engagement.sqlite ./copy.sqlite --dry-run
+lumos db check ./engagement.sqlite
 ```
+
+Interface keys: `N` new engagement, `P` scope rules, `S` scan, `I` import XML,
+`R` report, `T` tools (check, upgrade, rebuild, merge, interfaces), `!` event
+log, `:` palette, `?` help. Existing map keys (`m`/`v`/`s`, `o`/`O`, `i`,
+`p`/`x`, `/`, `t`, `+`/`-`, `H J K L`, `0`, `q`) are unchanged.
 
 `192.0.2.0/24` is documentation-only address space; replace it with an explicitly authorized target and scope. By default, the scan command displays its exact command and asks for interactive confirmation. In non-interactive use, `--yes` skips that prompt; review the target and options before using it in automation. For a target outside the allowlist, the CLI blocks the scan and prints the exact typed override phrase; use `--confirm-scope` only when authorized.
 
