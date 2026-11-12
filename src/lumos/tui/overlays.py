@@ -18,7 +18,7 @@ def _centered(width: int, height: int, box_width: int, box_height: int) -> tuple
 def draw_help(window: Any, styles: dict[str, int], unicode_ok: bool) -> None:
     height, width = window.getmaxyx()
     box_width = min(78, max(44, width - 8))
-    box_height = min(15, max(10, height - 2))
+    box_height = min(17, max(10, height - 2))
     top, left = _centered(width, height, box_width, box_height)
     itop, ileft, ih, iw = draw_box(
         window, top, left, box_height, box_width, title=" HELP ",
@@ -26,7 +26,7 @@ def draw_help(window: Any, styles: dict[str, int], unicode_ok: bool) -> None:
         unicode_ok=unicode_ok, focused=True,
     )
     columns: tuple[tuple[tuple[str, tuple[tuple[str, str], ...]], ...], ...]
-    if iw >= 60:
+    if iw >= 76:
         columns = (
             (
                 ("Navigate", (
@@ -39,7 +39,7 @@ def draw_help(window: Any, styles: dict[str, int], unicode_ok: bool) -> None:
                     ("m / v / s", "map, hosts, scan status"),
                     ("e / n", "edges / nodes"),
                     ("c", "jump to scanner root"),
-                    ("/", "search labels and addresses"),
+                    ("/", "search labels"),
                 )),
             ),
             (
@@ -49,10 +49,62 @@ def draw_help(window: Any, styles: dict[str, int], unicode_ok: bool) -> None:
                     ("0", "reset viewport"),
                     ("t", "next colour theme"),
                 )),
+                ("Links", (
+                    ("o / O", "expand / collapse hubs"),
+                    ("i", "hide inferred links"),
+                    ("p / x", "promote / reject (twice)"),
+                    ("e", "select the first link"),
+                )),
+            ),
+            (
+                ("Act", (
+                    ("N", "new engagement"),
+                    ("S", "run a scan"),
+                    ("P", "scope rules"),
+                    ("I", "import XML"),
+                    ("R", "write report"),
+                    ("T", "tools"),
+                    ("!", "event log"),
+                )),
                 ("System", (
                     (":", "command palette"),
                     ("r", "reload database"),
-                    ("q", "quit and restore terminal"),
+                    ("q", "quit"),
+                    ("?", "close this help"),
+                )),
+            ),
+        )
+    elif iw >= 56:
+        # Two columns keep the essential keys readable.
+        columns = (
+            (
+                ("Navigate", (
+                    ("↑ ↓ / j k", "select node or row"),
+                    ("m / v / s", "map, hosts, scans"),
+                    ("e / n", "edges / nodes"),
+                    ("/", "search labels"),
+                    ("t", "next colour theme"),
+                )),
+                ("Links", (
+                    ("o / O", "expand / collapse hubs"),
+                    ("i", "hide inferred links"),
+                    ("p / x", "promote / reject (twice)"),
+                )),
+            ),
+            (
+                ("Act", (
+                    ("N", "new engagement"),
+                    ("S", "run a scan"),
+                    ("P", "scope rules"),
+                    ("I", "import XML"),
+                    ("R", "write report"),
+                    ("T", "tools"),
+                    ("!", "event log"),
+                )),
+                ("System", (
+                    (":", "command palette"),
+                    ("r", "reload database"),
+                    ("q", "quit"),
                     ("?", "close this help"),
                 )),
             ),
@@ -61,13 +113,13 @@ def draw_help(window: Any, styles: dict[str, int], unicode_ok: bool) -> None:
         # Narrow terminals keep the essentials on one column.
         columns = ((
             ("Keys", (
-                ("↑ ↓ / j k", "select node or row"),
+                ("↑ ↓ / j k", "select"),
                 ("m / v / s", "map, hosts, scans"),
-                ("e / n", "edges / nodes"),
+                ("N / S / T", "new, scan, tools"),
+                ("P / I / R", "scope, import, report"),
+                ("o / i / p / x", "hubs, inferred, decide"),
                 ("/", "search"),
-                ("t", "next theme"),
                 ("q", "quit"),
-                ("?", "close this help"),
             )),
         ),)
     column_width = iw // len(columns) if columns else iw

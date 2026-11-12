@@ -12,10 +12,13 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ..core import state as local_state
 from ..core.decisions import DecisionError, record_decision
 from ..core.text import sanitize_text
+from ..services import actions
 from ..services.map_view import MapSnapshot, MapSnapshotWatcher, load_map_snapshot, render_plain_snapshot
 from . import theme
+from . import flows
 from .overlays import draw_help, draw_palette
 from .render import (
     ViewState,
@@ -41,6 +44,14 @@ _COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("refresh", "reload the database snapshot", "refresh"),
     ("theme", "cycle the colour theme", "theme"),
     ("reset", "reset pan and zoom", "reset"),
+    ("new", "create a new engagement database", "new"),
+    ("open", "open another engagement database", "open"),
+    ("scope", "list, add or remove scope rules", "scope"),
+    ("scan", "run a scope-checked Nmap scan", "scan"),
+    ("import", "import an Nmap XML file", "import"),
+    ("report", "write a Markdown or SVG report", "report"),
+    ("tools", "check, upgrade, rebuild, merge, interfaces", "tools"),
+    ("log", "recent events; w saves them", "log"),
     ("help", "keyboard reference", "help"),
     ("quit", "restore the terminal and exit", "quit"),
 )
@@ -276,12 +287,24 @@ def _run_curses(window: Any, database: Path) -> None:
     styles = theme.init_styles(theme_name, capability)
     unicode_ok = _unicode_enabled()
     window.timeout(1000)
-    watcher = MapSnapshotWatcher(database, interval=1.0)
-    watcher.start()
-    try:
-        _run_event_loop(window, database, watcher, unicode_ok, styles, theme_name, capability)
-    finally:
-        watcher.stop()
+    activity = actions.ActivityLog()
+    activity.add("info", f"opened {Path(database).name}")
+    path = Path(database)
+    while True:
+        watcher = MapSnapshotWatcher(path, interval=1.0)
+        watcher.start()
+        try:
+            switched = _run_event_loop(
+                window, path, watcher, unicode_ok, styles, theme_name, capability, activity
+            )
+        finally:
+            watcher.stop()
+        if switched is None:
+            return
+        path = Path(switched)
+        local_state.remember_engagement(path)
+        window.keypad(True)
+        window.timeout(1000)
 
 
 def _run_event_loop(
@@ -292,7 +315,8 @@ def _run_event_loop(
     styles: dict[str, int],
     theme_name: str,
     capability: str,
-) -> None:
+    activity: actions.ActivityLog,
+) -> Path | None:
     snapshot = load_map_snapshot(database)
     state = ViewState()
     _clamp_selection(state, snapshot)
@@ -324,6 +348,37 @@ def _run_event_loop(
             return
         if key == ord("?"):
             _show_help(window, snapshot, state, styles, unicode_ok, theme_name, capability)
+            dirty = True
+            continue
+        if key in (ord("N"), ord("P"), ord("S"), ord("I"), ord("R"), ord("T"), ord("!")):
+            action_name = {
+                ord("N"): "new",
+                ord("P"): "scope",
+                ord("S"): "scan",
+                ord("I"): "import",
+                ord("R"): "report",
+                ord("T"): "tools",
+                ord("!"): "log",
+            }[key]
+            switched = _run_command(
+                action_name,
+                window,
+                database,
+                state,
+                snapshot,
+                styles,
+                theme_name,
+                capability,
+                unicode_ok,
+                activity,
+            )
+            if switched is not None:
+                return switched
+            try:
+                snapshot = load_map_snapshot(database, expanded_zone=state.expanded_zone)
+                _clamp_selection(state, snapshot)
+            except Exception:  # keep the last good snapshot
+                pass
             dirty = True
             continue
 
@@ -414,7 +469,20 @@ def _run_event_loop(
         elif key in (10, 13):
             _set_view(state, "map")
         if action:
-            _run_command(action, window, database, state, snapshot, styles, theme_name, capability, unicode_ok)
+            switched = _run_command(
+                action,
+                window,
+                database,
+                state,
+                snapshot,
+                styles,
+                theme_name,
+                capability,
+                unicode_ok,
+                activity,
+            )
+            if switched is not None:
+                return switched
             if action == "quit":
                 return
             if action in {"theme", "help"}:
@@ -466,7 +534,9 @@ def _run_command(
     theme_name: str,
     capability: str,
     unicode_ok: bool,
-) -> None:
+    activity: actions.ActivityLog,
+) -> Path | None:
+    """Run one palette/key action; returns a database to switch to, if any."""
     if action in VIEWS:
         _set_view(state, action)
     elif action == "edges":
@@ -475,6 +545,44 @@ def _run_command(
         _select_root(state, snapshot)
     elif action == "refresh":
         state.notify("snapshot reloaded")
+    elif action == "new":
+        return flows.flow_new_engagement(window, styles, unicode_ok)
+    elif action == "open":
+        return flows.flow_open_path(window, styles, unicode_ok)
+    elif action == "scope":
+        result = flows.flow_scope(window, styles, unicode_ok, database)
+        if result is not None:
+            state.notify(result.message)
+            activity.add("info" if result.ok else "error", result.message, result.detail)
+    elif action == "scan":
+        result = flows.flow_scan(window, styles, unicode_ok, database)
+        if result is not None:
+            state.notify(result.message)
+            activity.add("info" if result.ok else "error", result.message, result.detail)
+    elif action == "import":
+        result = flows.flow_import(window, styles, unicode_ok, database)
+        if result is not None:
+            state.notify(result.message)
+            activity.add("info" if result.ok else "error", result.message, result.detail)
+    elif action == "report":
+        result = flows.flow_report(window, styles, unicode_ok, database)
+        if result is not None:
+            state.notify(result.message)
+            activity.add("info" if result.ok else "error", result.message, result.detail)
+    elif action == "tools":
+        result = flows.flow_tools(window, styles, unicode_ok, database)
+        if result is not None:
+            state.notify(result.message)
+            activity.add("info" if result.ok else "error", result.message, result.detail)
+    elif action == "log":
+        flows.flow_activity(window, styles, unicode_ok, activity)
+    return None
+
+
+def run_app_on_window(window: Any, database: str | Path) -> None:
+    """Run the interface on an existing curses window (used by the start screen)."""
+    window.keypad(True)
+    _run_curses(window, Path(database))
 
 
 def run_tui(database: str | Path) -> int:

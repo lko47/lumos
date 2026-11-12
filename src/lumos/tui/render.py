@@ -164,7 +164,7 @@ def draw_footer(
     hints = (
         ("q", "quit"), ("?", "help"), (":", "palette"), ("m", "map"), ("v", "hosts"),
         ("s", "scans"), ("/", "search"), ("t", "theme"), ("+/-", "zoom"), ("HJKL", "pan"),
-        ("0", "reset"), ("o/O", "hub"),
+        ("0", "reset"), ("o/O", "hub"), ("N", "new"), ("S", "scan"), ("T", "tools"),
     )
     x = 1
     for key, text in hints:
