@@ -13,6 +13,7 @@ from ..core.database import DatabaseError, open_database
 from ..core.text import sanitize_text
 
 
+
 @dataclass(frozen=True)
 class MapNode:
     id: str
@@ -72,10 +73,16 @@ class MapSnapshot:
     scans_detail: tuple[ScanInfo, ...] = ()
     root_label: str = ""
     root_interfaces: tuple[str, ...] = ()
+    not_shown: int = 0
 
 
 def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnapshot:
-    """Load a bounded read-only map snapshot; disconnected nodes stay unlinked."""
+    """Load a bounded read-only map snapshot.
+
+    The loader never invents links: every edge comes from ``topology_edges``.
+    Hosts without traceroute data carry an ``inferred`` edge written at scan
+    time, which the renderer draws with a dotted style and explicit provenance.
+    """
     if max_nodes < 1:
         raise ValueError("max_nodes must be at least 1")
     conn = open_database(database, readonly=True)
@@ -85,30 +92,45 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
             raise DatabaseError("engagement database has no engagement row")
         engagement_id, engagement_name = engagement
         rows = conn.execute(
-            """WITH latest AS (
+            """WITH chosen AS (
+                   SELECT id, engagement_id, kind, label, entity_id
+                   FROM topology_nodes
+                   WHERE engagement_id = ?
+                   ORDER BY CASE kind WHEN 'root' THEN 0 WHEN 'hop' THEN 1
+                             WHEN 'unknown_hop' THEN 2 ELSE 3 END, id
+                   LIMIT ?
+               ), chosen_devices AS (
+                   SELECT entity_id AS device_id FROM chosen WHERE kind = 'device'
+               ), latest AS (
                    SELECT h.* FROM host_observations h
+                   JOIN chosen_devices cd ON cd.device_id = h.device_id
                    WHERE h.id = (
                        SELECT h2.id FROM host_observations h2
                        WHERE h2.device_id = h.device_id
                        ORDER BY h2.observed_at DESC, h2.id DESC LIMIT 1
                    )
                ), address_text AS (
-                   SELECT host_observation_id, group_concat(display_value, ', ') AS addresses
-                   FROM (
-                       SELECT DISTINCT oa.host_observation_id, a.display_value
-                       FROM observation_addresses oa
-                       JOIN addresses a ON a.id = oa.address_id
-                   ) GROUP BY host_observation_id
+                   SELECT oa.host_observation_id, group_concat(a.display_value, ', ') AS addresses
+                   FROM observation_addresses oa
+                   JOIN addresses a ON a.id = oa.address_id
+                   WHERE oa.host_observation_id IN (SELECT id FROM latest)
+                   GROUP BY oa.host_observation_id
                ), port_counts AS (
-                   SELECT host_observation_id, SUM(CASE WHEN state = 'open' THEN 1 ELSE 0 END) AS open_ports
-                   FROM port_observations GROUP BY host_observation_id
+                   SELECT host_observation_id,
+                          SUM(CASE WHEN state = 'open' THEN 1 ELSE 0 END) AS open_ports
+                   FROM port_observations
+                   WHERE host_observation_id IN (SELECT id FROM latest)
+                   GROUP BY host_observation_id
                )
-               SELECT tn.id, tn.kind, tn.label, tn.entity_id,
+                              SELECT tn.id AS node_id,
+                      tn.kind AS node_kind,
+                      tn.label AS node_label,
+                      tn.entity_id AS entity_id,
                       COALESCE(l.hostname, '') AS hostname,
                       COALESCE(l.os_name, '') AS os_name,
                       COALESCE(a.addresses, '') AS addresses,
                       COALESCE(pc.open_ports, 0) AS open_ports,
-                      COALESCE(th.address_text, '') AS hop_address,
+                      COALESCE(ha.display_value, '') AS hop_address,
                       COALESCE((SELECT group_concat(p.port || '/' || p.protocol, ' ')
                                 FROM port_observations p
                                 WHERE p.host_observation_id = l.id AND p.state = 'open'), '') AS ports,
@@ -119,53 +141,73 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
                          AND (SELECT re.state FROM review_events re WHERE re.review_item_id = ri.id
                               ORDER BY re.created_at DESC, re.id DESC LIMIT 1)
                              IN ('unreviewed', 'flagged', 'out_of_scope')) AS review_count
-               FROM topology_nodes tn
+               FROM chosen tn
                LEFT JOIN latest l ON tn.kind = 'device' AND l.device_id = tn.entity_id
                LEFT JOIN address_text a ON a.host_observation_id = l.id
                LEFT JOIN port_counts pc ON pc.host_observation_id = l.id
-               LEFT JOIN trace_hops th ON tn.kind IN ('hop', 'unknown_hop') AND th.id = tn.entity_id
-               WHERE tn.engagement_id = ?
+               LEFT JOIN addresses ha ON tn.kind IN ('hop', 'unknown_hop') AND ha.id = tn.entity_id
                ORDER BY CASE tn.kind WHEN 'root' THEN 0 WHEN 'hop' THEN 1 WHEN 'unknown_hop' THEN 2 ELSE 3 END,
-                        lower(COALESCE(l.hostname, tn.label)), tn.id
-               LIMIT ?""",
+                        tn.id""",
             (engagement_id, max_nodes),
         ).fetchall()
 
+        # Only links whose *both* ends are visible belong on the map. A temp
+        # table of the visible ids keeps this an indexed join; filtering after
+        # the fact would materialise every link that leaves the scanner root.
+        node_ids_in_rows = [str(row["node_id"]) for row in rows]
+        conn.execute("CREATE TEMP TABLE IF NOT EXISTS visible_nodes(id TEXT PRIMARY KEY)")
+        conn.execute("DELETE FROM visible_nodes")
+        conn.executemany(
+            "INSERT OR IGNORE INTO visible_nodes(id) VALUES (?)", ((node_id,) for node_id in node_ids_in_rows)
+        )
+        edge_rows = conn.execute(
+            "SELECT e.id AS edge_id, e.from_node_id AS from_node_id, e.to_node_id AS to_node_id, "
+            "e.edge_type AS edge_type, e.source_kind AS source_kind, e.source_id AS source_id, "
+            "e.confidence AS confidence, e.first_observed_at AS first_observed_at, "
+            "e.last_confirmed_at AS last_confirmed_at, e.author AS author "
+            "FROM topology_edges e "
+            "JOIN visible_nodes source_node ON source_node.id = e.from_node_id "
+            "JOIN visible_nodes target_node ON target_node.id = e.to_node_id "
+            "WHERE e.engagement_id = ? "
+            "ORDER BY e.first_observed_at, e.id",
+            (engagement_id,),
+        ).fetchall()
         edges = tuple(
             MapEdge(
-                id=str(row[0]),
-                from_node_id=str(row[1]),
-                to_node_id=str(row[2]),
-                edge_type=sanitize_text(row[3], max_chars=64),
-                source_kind=sanitize_text(row[4], max_chars=64),
-                source_id=sanitize_text(row[5] or "", max_chars=128),
-                confidence=float(row[6]),
-                first_observed_at=sanitize_text(row[7], max_chars=64),
-                last_confirmed_at=sanitize_text(row[8] or "", max_chars=64),
-                author=sanitize_text(row[9] or "", max_chars=128),
+                id=str(row["edge_id"]),
+                from_node_id=str(row["from_node_id"]),
+                to_node_id=str(row["to_node_id"]),
+                edge_type=sanitize_text(row["edge_type"], max_chars=64),
+                source_kind=sanitize_text(row["source_kind"], max_chars=64),
+                source_id=sanitize_text(row["source_id"] or "", max_chars=128),
+                confidence=float(row["confidence"]),
+                first_observed_at=sanitize_text(row["first_observed_at"], max_chars=64),
+                last_confirmed_at=sanitize_text(row["last_confirmed_at"] or "", max_chars=64),
+                author=sanitize_text(row["author"] or "", max_chars=128),
             )
-            for row in conn.execute(
-                "SELECT id, from_node_id, to_node_id, edge_type, source_kind, source_id, confidence, "
-                "first_observed_at, last_confirmed_at, author FROM topology_edges "
-                "WHERE engagement_id = ? ORDER BY first_observed_at, id LIMIT ?",
-                (engagement_id, max_nodes * 2),
-            )
-            if row[1] and row[2]
+            for row in edge_rows
+            if row["from_node_id"] and row["to_node_id"]
         )
         nodes: list[MapNode] = []
         node_ids: set[str] = set()
         root_ids: list[str] = []
         for row in rows:
-            node_id = str(row[0])
+            node_id = str(row["node_id"])
             node_ids.add(node_id)
-            kind = str(row[1])
+            kind = str(row["node_kind"])
             if kind == "root":
                 root_ids.append(node_id)
-            base_label = row[4] if kind == "device" and row[4] else row[8] if kind in {"hop", "unknown_hop"} and row[8] else row[2]
+            hostname = str(row["hostname"] or "")
+            hop_address = str(row["hop_address"] or "")
+            base_label = (
+                hostname if kind == "device" and hostname
+                else hop_address if kind in {"hop", "unknown_hop"} and hop_address
+                else row["node_label"]
+            )
             label = sanitize_text(base_label or kind.replace("_", " "), max_chars=120)
             addresses = tuple(
                 sanitize_text(item, max_chars=128)
-                for item in str(row[6]).split(", ")
+                for item in str(row["addresses"] or "").split(", ")
                 if item
             )
             nodes.append(
@@ -174,19 +216,19 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
                     kind=kind,
                     label=label,
                     addresses=addresses,
-                    os_name=sanitize_text(row[5], max_chars=256),
-                    open_ports=int(row[7] or 0),
-                    review_count=int(row[10] or 0),
+                    os_name=sanitize_text(row["os_name"], max_chars=256),
+                    open_ports=int(row["open_ports"] or 0),
+                    review_count=int(row["review_count"] or 0),
                     distance=0,
                     ports=tuple(
                         sanitize_text(item, max_chars=16)
-                        for item in str(row[9]).split(" ")
+                        for item in str(row["ports"] or "").split(" ")
                         if item
                     )[:16],
                 )
             )
 
-        # Do not fabricate connectivity: an isolated host remains a marker without an edge.
+        # The loader never fabricates connectivity; hop distance is BFS over stored edges only.
         adjacency: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
         for edge in edges:
             if edge.from_node_id in node_ids and edge.to_node_id in node_ids:
@@ -214,18 +256,29 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
                     distances.get(n.id, 2 if n.kind != "root" else 0), n.ports)
             for n in nodes
         ]
-        scans = conn.execute("SELECT COUNT(*) FROM scans WHERE engagement_id = ?", (engagement_id,)).fetchone()[0]
+        # The bounded SQL picks nodes by kind and id (index-friendly); order the
+        # visible rows for reading here, keeping the scanner root first.
+        kind_rank = {"root": 0, "hop": 1, "unknown_hop": 2}
+        nodes.sort(key=lambda n: (kind_rank.get(n.kind, 3), n.label.casefold(), n.id))
+        scans = conn.execute(
+            "SELECT COUNT(*) AS count FROM scans WHERE engagement_id = ?", (engagement_id,)
+        ).fetchone()["count"]
         active_scans = conn.execute(
-            "SELECT COUNT(*) FROM scans WHERE engagement_id = ? AND status = 'running'", (engagement_id,)
-        ).fetchone()[0]
+            "SELECT COUNT(*) AS count FROM scans WHERE engagement_id = ? AND status = 'running'",
+            (engagement_id,),
+        ).fetchone()["count"]
         reviews = conn.execute(
-            "SELECT COUNT(*) FROM review_items r WHERE r.engagement_id = ? AND "
+            "SELECT COUNT(*) AS count FROM review_items r WHERE r.engagement_id = ? AND "
             "(SELECT e.state FROM review_events e WHERE e.review_item_id = r.id "
             "ORDER BY e.created_at DESC, e.id DESC LIMIT 1) IN ('unreviewed', 'flagged', 'out_of_scope')",
             (engagement_id,),
-        ).fetchone()[0]
+        ).fetchone()["count"]
+        total_nodes = conn.execute(
+            "SELECT COUNT(*) AS count FROM topology_nodes WHERE engagement_id = ?", (engagement_id,)
+        ).fetchone()["count"]
         root_row = conn.execute(
-            "SELECT tn.id, tn.label, COALESCE(vp.scanner_name, ''), tn.entity_id "
+            "SELECT tn.label AS node_label, COALESCE(vp.scanner_name, '') AS scanner_name, "
+            "tn.entity_id AS vantage_id "
             "FROM topology_nodes tn LEFT JOIN vantage_points vp ON vp.id = tn.entity_id "
             "WHERE tn.engagement_id = ? AND tn.kind = 'root' "
             "ORDER BY tn.created_at, tn.id LIMIT 1",
@@ -234,30 +287,34 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
         root_label = ""
         root_interfaces: list[str] = []
         if root_row is not None:
-            root_label = sanitize_text(root_row[2] or root_row[1] or "scanner", max_chars=120)
-            if root_row[3]:
+            root_label = sanitize_text(
+                root_row["scanner_name"] or root_row["node_label"] or "scanner", max_chars=120
+            )
+            if root_row["vantage_id"]:
                 for interface in conn.execute(
                     "SELECT name, address FROM vantage_interfaces "
                     "WHERE vantage_point_id = ? ORDER BY name, address LIMIT 24",
-                    (root_row[3],),
+                    (root_row["vantage_id"],),
                 ):
-                    name = sanitize_text(interface[0], max_chars=32)
-                    address = sanitize_text(interface[1], max_chars=64)
+                    name = sanitize_text(interface["name"], max_chars=32)
+                    address = sanitize_text(interface["address"], max_chars=64)
                     if name and address:
                         root_interfaces.append(f"{name} {address}")
                     elif name or address:
                         root_interfaces.append(name or address)
         scans_detail: list[ScanInfo] = []
         for row in conn.execute(
-            "SELECT s.id, s.status, s.targets_json, s.started_at, COALESCE(s.ended_at, ''), "
-            "s.exit_code, s.operator, s.interface, s.nmap_version, "
-            "(SELECT COUNT(*) FROM host_observations h WHERE h.scan_id = s.id) "
+            "SELECT s.id AS scan_id, s.status AS status, s.targets_json AS targets_json, "
+            "s.started_at AS started_at, COALESCE(s.ended_at, '') AS ended_at, "
+            "s.exit_code AS exit_code, s.operator AS operator, s.interface AS interface, "
+            "s.nmap_version AS nmap_version, "
+            "(SELECT COUNT(*) FROM host_observations h WHERE h.scan_id = s.id) AS hosts "
             "FROM scans s WHERE s.engagement_id = ? "
             "ORDER BY s.started_at DESC, s.id DESC LIMIT 25",
             (engagement_id,),
         ):
             try:
-                targets = json.loads(row[2]) if row[2] else []
+                targets = json.loads(row["targets_json"]) if row["targets_json"] else []
             except (TypeError, ValueError):
                 targets = []
             if isinstance(targets, dict):
@@ -267,16 +324,16 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
             targets = [str(item) for item in targets]
             scans_detail.append(
                 ScanInfo(
-                    id=str(row[0]),
-                    status=sanitize_text(row[1], max_chars=16),
+                    id=str(row["scan_id"]),
+                    status=sanitize_text(row["status"], max_chars=16),
                     targets=tuple(sanitize_text(item, max_chars=64) for item in targets[:8]),
-                    started_at=sanitize_text(row[3], max_chars=32),
-                    ended_at=sanitize_text(row[4], max_chars=32),
-                    exit_code=row[5],
-                    operator=sanitize_text(row[6], max_chars=64),
-                    interface=sanitize_text(row[7], max_chars=32),
-                    nmap_version=sanitize_text(row[8], max_chars=64),
-                    hosts=int(row[9] or 0),
+                    started_at=sanitize_text(row["started_at"], max_chars=32),
+                    ended_at=sanitize_text(row["ended_at"], max_chars=32),
+                    exit_code=row["exit_code"],
+                    operator=sanitize_text(row["operator"], max_chars=64),
+                    interface=sanitize_text(row["interface"], max_chars=32),
+                    nmap_version=sanitize_text(row["nmap_version"], max_chars=64),
+                    hosts=int(row["hosts"] or 0),
                 )
             )
         return MapSnapshot(
@@ -290,6 +347,7 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
             scans_detail=tuple(scans_detail),
             root_label=root_label,
             root_interfaces=tuple(root_interfaces),
+            not_shown=max(0, int(total_nodes) - len(nodes)),
         )
     finally:
         conn.close()
@@ -362,7 +420,9 @@ def render_plain_snapshot(snapshot: MapSnapshot) -> str:
     """Produce a stable non-interactive fallback without requiring a terminal."""
     lines = [
         f"Lumos - {sanitize_text(snapshot.engagement_name, max_chars=256)}",
-        f"Scans: {snapshot.scans} | Active: {snapshot.active_scans} | Nodes: {len(snapshot.nodes)} | Review: {snapshot.review_items}",
+        f"Scans: {snapshot.scans} | Active: {snapshot.active_scans} | "
+        f"Nodes: {len(snapshot.nodes)} | Review: {snapshot.review_items}"
+        + (f" | Not shown: {snapshot.not_shown}" if snapshot.not_shown else ""),
     ]
     for node in snapshot.nodes:
         addresses = ", ".join(node.addresses) if node.addresses else ""
@@ -372,7 +432,7 @@ def render_plain_snapshot(snapshot: MapSnapshot) -> str:
         line = f"{node.kind:12} {node.label}{details}"
         lines.append(sanitize_text(line, max_chars=512))
     if not snapshot.edges:
-        lines.append("No topology links recorded; disconnected nodes are not connected by inference.")
+        lines.append("No topology links recorded.")
     else:
         by_id = {node.id: node for node in snapshot.nodes}
         for edge in snapshot.edges:

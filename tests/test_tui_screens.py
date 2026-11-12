@@ -166,6 +166,14 @@ class ScreenTests(unittest.TestCase):
         text = self.draw(render.ViewState(), size=(6, 30))
         self.assertIn("Terminal too small", text)
 
+    def test_hidden_nodes_are_reported_in_header_and_panel(self) -> None:
+        self.snap = MapSnapshot(
+            "engagement", "terminal smoke", 2, 1, 1, self.snap.nodes, self.snap.edges,
+            self.snap.scans_detail, self.snap.root_label, self.snap.root_interfaces, not_shown=17,
+        )
+        text = self.draw(render.ViewState())
+        self.assertIn("(+17 not shown)", text)
+
     def test_footer_shows_notification_and_hints(self) -> None:
         state = render.ViewState()
         state.notify("snapshot reloaded")

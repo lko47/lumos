@@ -156,7 +156,10 @@ def draw_map_panel(
 ) -> tuple[dict[str, tuple[int, int]], tuple[int, int, int, int]]:
     itop, ileft, ih, iw = draw_box(
         window, top, left, height, width,
-        title=f"TOPOLOGY  {len(snapshot.nodes)} nodes  {len(snapshot.edges)} links",
+        title=(
+            f"TOPOLOGY  {len(snapshot.nodes)} nodes  {len(snapshot.edges)} links"
+            + (f"  (+{snapshot.not_shown} not shown)" if snapshot.not_shown else "")
+        ),
         border_attr=_attr(styles, "border_focus"),
         title_attr=_attr(styles, "title"),
         unicode_ok=unicode_ok,

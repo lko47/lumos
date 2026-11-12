@@ -6,9 +6,11 @@ import socket
 import uuid
 from pathlib import Path
 
+from . import ids
 from .database import open_database, utc_now
 from .nmap.iflist import InterfaceSnapshot
 from .text import sanitize_text
+from .topology_store import ensure_node
 
 MAX_INTERFACES = 64
 
@@ -41,35 +43,34 @@ def save_interfaces(
         if engagement is None:
             raise VantageStoreError("The database has no engagement to attach interfaces to")
         engagement_id = engagement[0]
+        engagement_uid = ids.ensure_engagement_uid(conn)
         operator_name = sanitize_text(operator or engagement[1] or "", max_chars=256)
         now = utc_now()
         with conn:
+            conn.execute(
+                "INSERT INTO vantage_points(id, engagement_id, scanner_name, operator, created_at) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+                (ids.vantage_id(engagement_uid, name), engagement_id, name, operator_name, now),
+            )
             row = conn.execute(
                 "SELECT id FROM vantage_points WHERE engagement_id = ? AND scanner_name = ?",
                 (engagement_id, name),
             ).fetchone()
-            if row is not None:
-                vantage_id = row[0]
-            else:
-                vantage_id = str(uuid.uuid4())
-                conn.execute(
-                    "INSERT INTO vantage_points(id, engagement_id, scanner_name, operator, created_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (vantage_id, engagement_id, name, operator_name, now),
-                )
+            if row is None:
+                raise VantageStoreError("Could not record the vantage point")
+            vantage_id = str(row[0])
             conn.execute("DELETE FROM vantage_interfaces WHERE vantage_point_id = ?", (vantage_id,))
-            root = conn.execute(
-                "SELECT id FROM topology_nodes WHERE engagement_id = ? AND kind = 'root' AND entity_id = ?",
-                (engagement_id, vantage_id),
-            ).fetchone()
-            if root is None:
-                # The scanner root must exist for the TUI to show a vantage point
-                # before any scan has run; scans reuse this same row.
-                conn.execute(
-                    "INSERT INTO topology_nodes(id, engagement_id, kind, entity_id, label, created_at) "
-                    "VALUES (?, ?, 'root', ?, ?, ?)",
-                    (str(uuid.uuid4()), engagement_id, vantage_id, name, now),
-                )
+            # The scanner root must exist for the TUI to show a vantage point
+            # before any scan has run; scans reuse this same row.
+            ensure_node(
+                conn,
+                engagement_id,
+                ids.node_id(engagement_uid, "root", vantage_id),
+                "root",
+                vantage_id,
+                name,
+                now,
+            )
             saved = 0
             for item in snapshot.interfaces:
                 interface_name = sanitize_text(item.name, max_chars=64).strip()

@@ -12,7 +12,13 @@ from pathlib import Path
 from typing import Sequence
 
 from . import __version__
-from .core.database import DatabaseError, check_database, initialize_database, open_database
+from .core.database import (
+    DatabaseError,
+    check_database,
+    initialize_database,
+    open_database,
+    upgrade_database,
+)
 from .core.nmap.iflist import discover_interfaces
 from .core.nmap.runner import NmapRunnerError
 from .core.reports import write_markdown_report
@@ -40,6 +46,8 @@ def _parser() -> argparse.ArgumentParser:
     init.add_argument("--name", required=True, help="engagement name")
     check = db_commands.add_parser("check", help="check database schema and integrity")
     check.add_argument("path", type=Path)
+    upgrade = db_commands.add_parser("upgrade", help="apply forward-only schema migrations in place")
+    upgrade.add_argument("path", type=Path)
 
     scope = commands.add_parser("scope", help="manage the engagement's scan scope")
     scope_commands = scope.add_subparsers(dest="scope_command", required=True)
@@ -178,12 +186,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(AUTHORIZED_USE_NOTICE, file=sys.stderr)
             print(f"Created {args.path} (engagement {engagement_id})")
             return 0
+        if args.command == "db" and args.db_command == "upgrade":
+            result = upgrade_database(args.path)
+            print(
+                f"Upgraded {args.path} from schema {result['previous_user_version']} "
+                f"to {result['user_version']}; engagement uid {result['engagement_uid']}"
+            )
+            return 0
         if args.command == "db" and args.db_command == "check":
             result = check_database(args.path)
             print(
                 f"Valid Lumos database: schema {result['user_version']}; "
                 f"{result['tables']} tables; {result['views']} views; "
-                f"integrity {result['integrity']}"
+                f"integrity {result['integrity']}; engagement uid {result['engagement_uid']}"
             )
             return 0
         if args.command == "scope" and args.scope_command == "add":

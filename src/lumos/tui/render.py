@@ -101,9 +101,12 @@ def draw_header(
                 unicode_ok=unicode_ok)
     safe_addstr(window, 0, used, head, max(0, width - used), attr(styles, "subtitle"), unicode_ok=unicode_ok)
     used += display_width(head)
+    nodes_text = f"nodes {len(snapshot.nodes)}"
+    if snapshot.not_shown:
+        nodes_text += f" (+{snapshot.not_shown} not shown)"
     stats = (
         f"scans {snapshot.scans}  active {snapshot.active_scans}  "
-        f"nodes {len(snapshot.nodes)}  review {snapshot.review_items}"
+        f"{nodes_text}  review {snapshot.review_items}"
     )
     remaining = max(0, width - used - 10)
     stats = clip(stats, remaining, unicode_ok=unicode_ok)
@@ -325,9 +328,12 @@ def draw_map(
     brand = "◆ LUMOS" if unicode_ok else "* LUMOS"
     head = f" {brand}  MAP  {sep}  {snapshot.engagement_name}  {sep}  "
     safe_addstr(window, 0, 0, clip(head, width), width, attr(colors, "header"), unicode_ok=unicode_ok)
+    nodes_text = f"nodes {len(snapshot.nodes)}"
+    if snapshot.not_shown:
+        nodes_text += f" (+{snapshot.not_shown} not shown)"
     stats = (
         f"scans {snapshot.scans}  active {snapshot.active_scans}  "
-        f"nodes {len(snapshot.nodes)}  review {snapshot.review_items}"
+        f"{nodes_text}  review {snapshot.review_items}"
     )
     if width > display_width(head) + display_width(stats) + 2:
         safe_addstr(window, 0, display_width(head), stats, width - display_width(head),

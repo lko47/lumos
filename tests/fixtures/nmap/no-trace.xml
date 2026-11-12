@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<nmaprun scanner="nmap" args="nmap -sT -oX - 192.0.2.77" start="1762600100" startstr="Sun Nov 08 16:01:40 2026" version="7.99" xmloutputversion="1.05">
+  <scaninfo type="connect" protocol="tcp" numservices="1" services="80"/>
+  <host starttime="1762600100" endtime="1762600101">
+    <status state="up" reason="echo-reply" reason_ttl="64"/>
+    <address addr="192.0.2.77" addrtype="ipv4"/>
+    <hostnames><hostname name="plain-host.example.invalid" type="user"/></hostnames>
+    <ports>
+      <port protocol="tcp" portid="80">
+        <state state="open" reason="syn-ack" reason_ttl="64"/>
+        <service name="http" product="nginx" version="1.24" method="probed" conf="10"/>
+      </port>
+    </ports>
+    <times srtt="900" rttvar="400" to="3000"/>
+  </host>
+  <runstats>
+    <finished time="1762600101" timestr="Sun Nov 08 16:01:41 2026" elapsed="1.00" summary="Synthetic fixture without traceroute" exit="success"/>
+    <hosts up="1" down="0" total="1"/>
+  </runstats>
+</nmaprun>

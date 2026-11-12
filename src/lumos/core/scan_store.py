@@ -13,10 +13,12 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from . import ids
 from .database import DatabaseError, open_database, utc_now
 from .nmap.xml_stream import AddressRecord, HostRecord, NmapXmlError
 from .scope import ScopeRule, is_target_in_scope
 from .text import sanitize_text
+from .topology_store import ensure_node
 
 _BATCH_SIZE = 50
 _MAC = re.compile(r"^[0-9a-fA-F]{12}$")
@@ -47,6 +49,7 @@ def _normalized_address(address: AddressRecord) -> tuple[str, str] | None:
 
 def _insert_review(
     conn,
+    engagement_uid: str,
     engagement_id: str,
     target_kind: str,
     target_id: str,
@@ -56,21 +59,14 @@ def _insert_review(
     state: str = "unreviewed",
 ) -> None:
     now = utc_now()
-    existing = conn.execute(
-        "SELECT id FROM review_items WHERE engagement_id = ? AND target_kind = ? "
-        "AND target_id = ? AND reason_code = ?",
-        (engagement_id, target_kind, target_id, reason_code),
-    ).fetchone()
-    if existing:
-        item_id = existing[0]
-        conn.execute("UPDATE review_items SET latest_event_at = ? WHERE id = ?", (now, item_id))
-    else:
-        item_id = str(uuid.uuid4())
-        conn.execute(
-            "INSERT INTO review_items(id, engagement_id, target_kind, target_id, reason_code, reason_detail, created_at, latest_event_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (item_id, engagement_id, target_kind, target_id, reason_code, sanitize_text(detail), now, now),
-        )
+    item_id = ids.review_item_id(engagement_uid, target_kind, target_id, reason_code)
+    conn.execute(
+        "INSERT INTO review_items(id, engagement_id, target_kind, target_id, reason_code, reason_detail, created_at, latest_event_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(engagement_id, target_kind, target_id, reason_code) DO UPDATE SET "
+        "latest_event_at = excluded.latest_event_at",
+        (item_id, engagement_id, target_kind, target_id, reason_code, sanitize_text(detail), now, now),
+    )
     conn.execute(
         "INSERT INTO review_events(id, review_item_id, state, reason_detail, author, created_at) "
         "VALUES (?, ?, ?, ?, 'system', ?)",
@@ -86,7 +82,14 @@ def _ensure_address(conn, network_id: str, address: AddressRecord, created_at: s
     conn.execute(
         "INSERT INTO addresses(id, network_id, kind, normalized_value, display_value, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(network_id, kind, normalized_value) DO NOTHING",
-        (str(uuid.uuid4()), network_id, kind, value, sanitize_text(address.value, max_chars=256), created_at),
+        (
+            ids.address_id(network_id, kind, value),
+            network_id,
+            kind,
+            value,
+            sanitize_text(address.value, max_chars=256),
+            created_at,
+        ),
     )
     row = conn.execute(
         "SELECT id FROM addresses WHERE network_id = ? AND kind = ? AND normalized_value = ?",
@@ -97,6 +100,7 @@ def _ensure_address(conn, network_id: str, address: AddressRecord, created_at: s
 
 def _add_duplicate_proposal(
     conn,
+    engagement_uid: str,
     engagement_id: str,
     left_device: str,
     right_device: str,
@@ -121,6 +125,7 @@ def _add_duplicate_proposal(
     )
     _insert_review(
         conn,
+        engagement_uid,
         engagement_id,
         "duplicate_proposal",
         proposal_id,
@@ -129,13 +134,55 @@ def _add_duplicate_proposal(
     )
 
 
+def _upsert_edge(
+    conn,
+    engagement_uid: str,
+    engagement_id: str,
+    from_node: str,
+    to_node: str,
+    edge_type: str,
+    source_kind: str,
+    source_id: str | None,
+    confidence: float,
+    now: str,
+    *,
+    confirmed: bool = True,
+) -> None:
+    if from_node == to_node:
+        return
+    conn.execute(
+        "INSERT INTO topology_edges(id, engagement_id, from_node_id, to_node_id, edge_type, "
+        "source_kind, source_id, confidence, first_observed_at, last_confirmed_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(engagement_id, from_node_id, to_node_id, edge_type, source_kind) DO UPDATE SET "
+        "source_id = excluded.source_id, "
+        "confidence = MAX(topology_edges.confidence, excluded.confidence), "
+        "last_confirmed_at = COALESCE(excluded.last_confirmed_at, topology_edges.last_confirmed_at)",
+        (
+            ids.edge_id(engagement_uid, from_node, to_node, edge_type, source_kind),
+            engagement_id,
+            from_node,
+            to_node,
+            edge_type,
+            source_kind,
+            source_id,
+            confidence,
+            now,
+            now if confirmed else None,
+        ),
+    )
+
+
 def _persist_host(conn, context: dict[str, Any], host: HostRecord) -> None:
     now = utc_now()
+    engagement_uid = context["engagement_uid"]
     engagement_id = context["engagement_id"]
     network_id = context["network_id"]
     scan_id = context["scan_id"]
-    device_id = str(uuid.uuid4())
-    observation_id = str(uuid.uuid4())
+    ordinal = int(context.get("host_ordinal", 0))
+    context["host_ordinal"] = ordinal + 1
+    device_id = ids.device_id(engagement_uid, scan_id, ordinal)
+    observation_id = ids.observation_id(device_id)
     conn.execute(
         "INSERT INTO devices(id, engagement_id, created_at) VALUES (?, ?, ?)",
         (device_id, engagement_id, now),
@@ -190,6 +237,7 @@ def _persist_host(conn, context: dict[str, Any], host: HostRecord) -> None:
         for row in previous:
             _add_duplicate_proposal(
                 conn,
+                engagement_uid,
                 engagement_id,
                 device_id,
                 row[0],
@@ -209,6 +257,7 @@ def _persist_host(conn, context: dict[str, Any], host: HostRecord) -> None:
         for row in old:
             _add_duplicate_proposal(
                 conn,
+                engagement_uid,
                 engagement_id,
                 device_id,
                 row[0],
@@ -217,16 +266,24 @@ def _persist_host(conn, context: dict[str, Any], host: HostRecord) -> None:
             )
         conn.execute(
             "INSERT INTO identity_claims(id, device_id, network_id, kind, normalized_value, display_value, observed_at, source_observation_id) "
-            "VALUES (?, ?, ?, 'hostname', ?, ?, ?, ?)",
-            (str(uuid.uuid4()), device_id, network_id, norm, sanitize_text(hostname), now, observation_id),
+            "VALUES (?, ?, ?, 'hostname', ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+            (
+                ids.identity_claim_id(device_id, "hostname", norm, observation_id),
+                device_id,
+                network_id,
+                norm,
+                sanitize_text(hostname),
+                now,
+                observation_id,
+            ),
         )
 
     port_ids: dict[int, str] = {}
     for port in host.ports:
-        port_id = str(uuid.uuid4())
+        port_id = ids.port_observation_id(observation_id, sanitize_text(port.protocol, max_chars=32), port.port)
         conn.execute(
             "INSERT INTO port_observations(id, host_observation_id, protocol, port, state, service, product, version, tunnel, extra_info) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
             (
                 port_id,
                 observation_id,
@@ -244,7 +301,7 @@ def _persist_host(conn, context: dict[str, Any], host: HostRecord) -> None:
     for script in host.scripts:
         conn.execute(
             "INSERT INTO script_observations(id, host_observation_id, port_observation_id, script_id, output, observed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
             (
                 str(uuid.uuid4()),
                 observation_id,
@@ -255,26 +312,31 @@ def _persist_host(conn, context: dict[str, Any], host: HostRecord) -> None:
             ),
         )
 
-    node_id = str(uuid.uuid4())
     primary = next((a.value for a in host.addresses if a.kind in {"ipv4", "ipv6"}), "")
     label = host.hostnames[0] if host.hostnames else primary or f"device-{device_id[:8]}"
-    conn.execute(
-        "INSERT INTO topology_nodes(id, engagement_id, kind, entity_id, label, created_at) VALUES (?, ?, 'device', ?, ?, ?)",
-        (node_id, engagement_id, device_id, sanitize_text(label, max_chars=512), now),
+    node_id = ensure_node(
+        conn,
+        engagement_id,
+        ids.node_id(engagement_uid, "device", device_id),
+        "device",
+        device_id,
+        sanitize_text(label, max_chars=512),
+        now,
     )
 
     if not host.hostnames:
-        _insert_review(conn, engagement_id, "host_observation", observation_id, "no_hostname", "No hostname was reported by Nmap.")
+        _insert_review(conn, engagement_uid, engagement_id, "host_observation", observation_id, "no_hostname", "No hostname was reported by Nmap.")
     if not host.os_name or host.os_accuracy is None or host.os_accuracy < 80:
-        _insert_review(conn, engagement_id, "host_observation", observation_id, "no_reliable_os", "No reliable OS match was reported by Nmap.")
+        _insert_review(conn, engagement_uid, engagement_id, "host_observation", observation_id, "no_reliable_os", "No reliable OS match was reported by Nmap.")
     if any(a.kind == "mac" for a in host.addresses) and not mac_vendor:
-        _insert_review(conn, engagement_id, "host_observation", observation_id, "unknown_mac_vendor", "Nmap did not identify a MAC vendor.")
+        _insert_review(conn, engagement_uid, engagement_id, "host_observation", observation_id, "unknown_mac_vendor", "Nmap did not identify a MAC vendor.")
     if not host.ports:
-        _insert_review(conn, engagement_id, "host_observation", observation_id, "no_port_data", "Host was seen without port data (for example ARP or ping discovery).")
+        _insert_review(conn, engagement_uid, engagement_id, "host_observation", observation_id, "no_port_data", "Host was seen without port data (for example ARP or ping discovery).")
     for port in host.ports:
         if port.state == "open" and (not port.service or port.service.lower() in {"unknown", "tcpwrapped"}):
             _insert_review(
                 conn,
+                engagement_uid,
                 engagement_id,
                 "port_observation",
                 port_ids[port.port],
@@ -284,6 +346,7 @@ def _persist_host(conn, context: dict[str, Any], host: HostRecord) -> None:
     if out_of_scope_values:
         _insert_review(
             conn,
+            engagement_uid,
             engagement_id,
             "host_observation",
             observation_id,
@@ -292,39 +355,48 @@ def _persist_host(conn, context: dict[str, Any], host: HostRecord) -> None:
             state="out_of_scope",
         )
 
+    root_id = context["root_node_id"]
     if host.hops:
-        path_id = str(uuid.uuid4())
-        root_id = context["root_node_id"]
+        path_id = ids.trace_path_id(scan_id, node_id, 0)
         conn.execute(
             "INSERT INTO trace_paths(id, scan_id, vantage_point_id, root_node_id, destination_node_id, path_index, observed_at) "
-            "VALUES (?, ?, ?, ?, ?, 0, ?)",
+            "VALUES (?, ?, ?, ?, ?, 0, ?) ON CONFLICT DO NOTHING",
             (path_id, scan_id, context["vantage_id"], root_id, node_id, now),
         )
         path_nodes = [root_id]
         for hop in host.hops:
-            trace_hop_id = str(uuid.uuid4())
+            trace_hop_id = ids.trace_hop_id(path_id, hop.ttl)
             address_id = None
             if hop.responded and hop.address:
                 kind = "ipv6" if ":" in hop.address else "ipv4"
                 address_id = _ensure_address(conn, network_id, AddressRecord(kind, hop.address), now)
             conn.execute(
                 "INSERT INTO trace_hops(id, trace_path_id, hop_number, address_id, address_text, rtt_ms, responded) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
                 (trace_hop_id, path_id, hop.ttl, address_id, hop.address, hop.rtt_ms, int(hop.responded)),
             )
-            hop_node_id = str(uuid.uuid4())
             hop_kind = "hop" if hop.responded else "unknown_hop"
             hop_label = hop.hostname or hop.address or f"unresponsive hop {hop.ttl}"
-            conn.execute(
-                "INSERT INTO topology_nodes(id, engagement_id, kind, entity_id, label, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (hop_node_id, engagement_id, hop_kind, trace_hop_id, sanitize_text(hop_label, max_chars=512), now),
+            # Key a responding hop on its address row so the same router is one
+            # node across scans; unresponsive hops have no address, so they stay
+            # scoped to the vantage point and TTL.
+            hop_key = address_id or f"{context['vantage_id']}:{hop.ttl}"
+            hop_node_id = ensure_node(
+                conn,
+                engagement_id,
+                ids.node_id(engagement_uid, hop_kind, hop_key),
+                hop_kind,
+                hop_key,
+                sanitize_text(hop_label, max_chars=512),
+                now,
             )
             path_nodes.append(hop_node_id)
             if not hop.responded:
-                _insert_review(conn, engagement_id, "topology_node", hop_node_id, "unresponsive_traceroute_hop", f"Traceroute hop {hop.ttl} did not reply.")
+                _insert_review(conn, engagement_uid, engagement_id, "topology_node", hop_node_id, "unresponsive_traceroute_hop", f"Traceroute hop {hop.ttl} did not reply.")
             elif hop.address and not is_target_in_scope(hop.address, context["scope_rules"]).allowed:
                 _insert_review(
                     conn,
+                    engagement_uid,
                     engagement_id,
                     "topology_node",
                     hop_node_id,
@@ -333,14 +405,40 @@ def _persist_host(conn, context: dict[str, Any], host: HostRecord) -> None:
                     state="out_of_scope",
                 )
         path_nodes.append(node_id)
+        seen_pairs: set[tuple[str, str]] = set()
         for left, right in zip(path_nodes, path_nodes[1:]):
-            if left == right:
+            if left == right or (left, right) in seen_pairs:
                 continue
-            conn.execute(
-                "INSERT INTO topology_edges(id, engagement_id, from_node_id, to_node_id, edge_type, source_kind, source_id, confidence, first_observed_at) "
-                "VALUES (?, ?, ?, ?, 'traceroute', 'nmap_xml', ?, 1.0, ?)",
-                (str(uuid.uuid4()), engagement_id, left, right, path_id, now),
+            seen_pairs.add((left, right))
+            _upsert_edge(
+                conn,
+                engagement_uid,
+                engagement_id,
+                left,
+                right,
+                "traceroute",
+                "nmap_xml",
+                path_id,
+                1.0,
+                now,
             )
+    else:
+        # No traceroute data: record a clearly marked inference from the scanner
+        # root so the host is not silently disconnected. It is never presented
+        # as an observed link (dotted style, confidence well below 1.0).
+        _upsert_edge(
+            conn,
+            engagement_uid,
+            engagement_id,
+            root_id,
+            node_id,
+            "inferred",
+            "inference",
+            scan_id,
+            0.35,
+            now,
+            confirmed=False,
+        )
 
 
 class ScanWriter:
@@ -428,35 +526,34 @@ class ScanWriter:
     def _initialize(self, conn) -> None:
         ctx = self.context
         engagement_id = ctx["engagement_id"]
+        engagement_uid = ids.ensure_engagement_uid(conn)
+        ctx["engagement_uid"] = engagement_uid
+        ctx["host_ordinal"] = 0
+        ctx["vantage_id"] = ids.vantage_id(engagement_uid, ctx["scanner_name"])
+        conn.execute(
+            "INSERT INTO vantage_points(id, engagement_id, scanner_name, operator, created_at) "
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+            (ctx["vantage_id"], engagement_id, ctx["scanner_name"], ctx["operator"], ctx["started_at"]),
+        )
         vantage = conn.execute(
             "SELECT id FROM vantage_points WHERE engagement_id = ? AND scanner_name = ?",
             (engagement_id, ctx["scanner_name"]),
         ).fetchone()
-        if vantage:
-            vantage_id = vantage[0]
-        else:
-            vantage_id = str(uuid.uuid4())
-            conn.execute(
-                "INSERT INTO vantage_points(id, engagement_id, scanner_name, operator, created_at) VALUES (?, ?, ?, ?, ?)",
-                (vantage_id, engagement_id, ctx["scanner_name"], ctx["operator"], ctx["started_at"]),
-            )
-        root = conn.execute(
-            "SELECT id FROM topology_nodes WHERE engagement_id = ? AND kind = 'root' AND entity_id = ?",
-            (engagement_id, vantage_id),
-        ).fetchone()
-        root_id = root[0] if root else str(uuid.uuid4())
-        if not root:
-            conn.execute(
-                "INSERT INTO topology_nodes(id, engagement_id, kind, entity_id, label, created_at) VALUES (?, ?, 'root', ?, ?, ?)",
-                (root_id, engagement_id, vantage_id, ctx["scanner_name"], ctx["started_at"]),
-            )
-        ctx["vantage_id"] = vantage_id
-        ctx["root_node_id"] = root_id
+        ctx["vantage_id"] = str(vantage[0])
+        ctx["root_node_id"] = ensure_node(
+            conn,
+            engagement_id,
+            ids.node_id(engagement_uid, "root", ctx["vantage_id"]),
+            "root",
+            ctx["vantage_id"],
+            ctx["scanner_name"],
+            ctx["started_at"],
+        )
         conn.execute(
             "INSERT INTO scans(id, engagement_id, vantage_point_id, exact_args_json, redacted_args_json, targets_json, nmap_version, interface, operator, started_at, status, scope_override, evidence_stored) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)",
             (
-                ctx["scan_id"], engagement_id, vantage_id, ctx["args_json"], ctx["args_json"], ctx["targets_json"],
+                ctx["scan_id"], engagement_id, ctx["vantage_id"], ctx["args_json"], ctx["args_json"], ctx["targets_json"],
                 ctx["nmap_version"], ctx["interface"], ctx["operator"], ctx["started_at"],
                 int(ctx["scope_override"]), int(ctx["evidence_enabled"]),
             ),
@@ -525,6 +622,8 @@ def make_scan_context(
     return {
         "scan_id": str(uuid.uuid4()),
         "engagement_id": engagement_id,
+        "engagement_uid": "",
+        "host_ordinal": 0,
         "network_id": network_id,
         "scope_rules": [],
         "args_json": json.dumps(redacted_argv(argv), ensure_ascii=False),

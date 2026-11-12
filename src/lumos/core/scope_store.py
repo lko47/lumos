@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import uuid
 from pathlib import Path
 
+from . import ids
 from .database import open_database, utc_now
 from .scope import ScopeRule, parse_target, parse_scope_rule
 from .text import sanitize_text
@@ -31,20 +31,27 @@ def add_scope_rule(
         if engagement is None:
             raise ValueError("Database has no engagement")
         engagement_id = engagement[0]
+        engagement_uid = ids.ensure_engagement_uid(conn)
         network = conn.execute(
             "SELECT id, family, cidr FROM networks WHERE engagement_id = ? AND name = ?",
             (engagement_id, network_name),
         ).fetchone()
         now = utc_now()
         if network is None:
-            network_id = str(uuid.uuid4())
+            network_id = ids.network_id(engagement_uid, network_name)
             cidr = spec.canonical if spec.kind == "cidr" else None
             family = spec.family if spec.kind != "hostname" else None
             conn.execute(
                 "INSERT INTO networks(id, engagement_id, name, cidr, family, notes, created_at) "
-                "VALUES (?, ?, ?, ?, ?, '', ?)",
+                "VALUES (?, ?, ?, ?, ?, '', ?) ON CONFLICT DO NOTHING",
                 (network_id, engagement_id, network_name, cidr, family, now),
             )
+            stored = conn.execute(
+                "SELECT id FROM networks WHERE engagement_id = ? AND name = ?",
+                (engagement_id, network_name),
+            ).fetchone()
+            if stored is not None:
+                network_id = str(stored[0])
         else:
             network_id = network[0]
             old_family = network[1]
@@ -66,8 +73,16 @@ def add_scope_rule(
             return network_id, False
         conn.execute(
             "INSERT INTO scope_rules(id, engagement_id, rule_kind, rule_value, included, author, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (str(uuid.uuid4()), engagement_id, rule.rule_kind, rule.rule_value, int(included), author, now),
+            "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+            (
+                ids.scope_rule_id(engagement_uid, rule.rule_kind, rule.rule_value, included),
+                engagement_id,
+                rule.rule_kind,
+                rule.rule_value,
+                int(included),
+                author,
+                now,
+            ),
         )
         conn.commit()
         return network_id, True

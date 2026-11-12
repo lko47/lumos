@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 APPLICATION_ID = 0x4C554D53  # ASCII "LUMS"; stable for this database format.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Schema objects are authored here. Import validation will compare against these
 # names and column layouts; it must never execute SQL read from an imported file.
 _MIGRATION_1 = r"""
-PRAGMA application_id = 1280658771;
-
 CREATE TABLE engagement (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -405,3 +403,84 @@ WHERE h.observed_at = (
 """
 
 MIGRATIONS = {1: _MIGRATION_1}
+
+# Schema 2 makes the file mergeable: deterministic natural-key indexes, an
+# engagement identity record, and a log of merge attempts. Exact duplicate rows
+# are collapsed to the earliest row before each unique index is created, so a
+# pre-existing engagement file can be upgraded in place.
+_MIGRATION_2 = r"""
+CREATE TABLE meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE merge_log (
+    id TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL,
+    source_label TEXT NOT NULL DEFAULT '',
+    source_application_id INTEGER NOT NULL,
+    source_user_version INTEGER NOT NULL,
+    source_engagement_uid TEXT NOT NULL DEFAULT '',
+    dry_run INTEGER NOT NULL DEFAULT 0 CHECK (dry_run IN (0, 1)),
+    operator TEXT NOT NULL DEFAULT '',
+    outcome TEXT NOT NULL CHECK (outcome IN ('applied', 'rejected', 'dry_run')),
+    stats_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX idx_merge_log_applied ON merge_log(applied_at DESC);
+
+DELETE FROM scope_rules WHERE rowid NOT IN (
+    SELECT MIN(rowid) FROM scope_rules
+    GROUP BY engagement_id, rule_kind, rule_value, included);
+CREATE UNIQUE INDEX ux_scope_rules_natural
+    ON scope_rules(engagement_id, rule_kind, rule_value, included);
+
+DELETE FROM review_items WHERE rowid NOT IN (
+    SELECT MIN(rowid) FROM review_items
+    GROUP BY engagement_id, target_kind, target_id, reason_code);
+CREATE UNIQUE INDEX ux_review_items_natural
+    ON review_items(engagement_id, target_kind, target_id, reason_code);
+
+DELETE FROM duplicate_proposals WHERE rowid NOT IN (
+    SELECT MIN(rowid) FROM duplicate_proposals
+    GROUP BY left_kind, left_id, right_kind, right_id);
+CREATE UNIQUE INDEX ux_duplicate_proposals_natural
+    ON duplicate_proposals(left_kind, left_id, right_kind, right_id);
+
+DELETE FROM topology_edges WHERE rowid NOT IN (
+    SELECT MIN(rowid) FROM topology_edges
+    GROUP BY engagement_id, from_node_id, to_node_id, edge_type, source_kind);
+CREATE UNIQUE INDEX ux_topology_edges_natural
+    ON topology_edges(engagement_id, from_node_id, to_node_id, edge_type, source_kind);
+
+DELETE FROM vantage_points WHERE rowid NOT IN (
+    SELECT MIN(rowid) FROM vantage_points
+    GROUP BY engagement_id, scanner_name);
+CREATE UNIQUE INDEX ux_vantage_points_scanner
+    ON vantage_points(engagement_id, scanner_name);
+
+DELETE FROM trace_paths WHERE rowid NOT IN (
+    SELECT MIN(rowid) FROM trace_paths
+    GROUP BY scan_id, IFNULL(destination_node_id, ''), path_index);
+CREATE UNIQUE INDEX ux_trace_paths_destination
+    ON trace_paths(scan_id, IFNULL(destination_node_id, ''), path_index);
+
+DELETE FROM script_observations WHERE rowid NOT IN (
+    SELECT MIN(rowid) FROM script_observations
+    GROUP BY host_observation_id, IFNULL(port_observation_id, ''), script_id);
+CREATE UNIQUE INDEX ux_script_observations_natural
+    ON script_observations(host_observation_id, IFNULL(port_observation_id, ''), script_id);
+
+DELETE FROM identity_claims WHERE rowid NOT IN (
+    SELECT MIN(rowid) FROM identity_claims
+    GROUP BY device_id, kind, normalized_value, IFNULL(source_observation_id, ''));
+CREATE UNIQUE INDEX ux_identity_claims_natural
+    ON identity_claims(device_id, kind, normalized_value, IFNULL(source_observation_id, ''));
+"""
+
+MIGRATIONS[2] = _MIGRATION_2
+
+# The application id is written from the constant so the file identity and the
+# validator can never drift apart.
+_MIGRATION_1 = "PRAGMA application_id = %d;\n" % APPLICATION_ID + _MIGRATION_1
+MIGRATIONS[1] = _MIGRATION_1

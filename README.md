@@ -15,9 +15,9 @@ The project name is provisional. No game assets, names, or layouts are used.
 
 ## Current status: Phase 3 in progress
 
-Implemented: schema-v1 database creation and checks; scope rules; Nmap version discovery, safe argument-vector execution, streamed XML parsing and persistence; exact-hostname allowlisting before Nmap-based hostname resolution; scan audit/provenance and compressed raw XML evidence; bounded Nmap XML import; Markdown report; and a bounded, read-only map/host/scan TUI. `lumos tui DATABASE` opens curses on a terminal and prints an ASCII snapshot when output is redirected.
+Implemented: schema-v2 database creation, upgrade, and checks; scope rules; Nmap version discovery, safe argument-vector execution, streamed XML parsing and persistence; exact-hostname allowlisting before Nmap-based hostname resolution; scan audit/provenance and compressed raw XML evidence; bounded Nmap XML import; Markdown report; and a bounded, read-only map/host/scan TUI. `lumos tui DATABASE` opens curses on a terminal and prints an ASCII snapshot when output is redirected.
 
-The TUI has three tabs (`m` map, `v` hosts, `s` scans, `Tab` cycles), a durable keyboard identity, a command palette (`:`), a help overlay (`?`), incremental search (`/`), and manual refresh (`r`). The map draws only stored `topology_edges`, using a tested 2-by-4 Unicode braille rasterizer with per-edge-type patterns and an ASCII line fallback (`LUMOS_ASCII=1` forces it). Node placement is a deterministic ring layout keyed on a blake2b hash of the node id, so new discoveries never reshuffle existing nodes; the viewport supports zoom (`+`/`-`), pan (`H`/`J`/`K`/`L`), and reset (`0`). The detail sidebar lists addresses, OS, open ports per node, hop distance, review flags, and — for the scanner root — any vantage interfaces saved by `lumos interfaces --save`. Edge selection shows provenance, confidence, and timestamps. The scans tab lists recent scans with status, host counts, elapsed time, and targets, read from a bounded projection of the scans table.
+The TUI has three tabs (`m` map, `v` hosts, `s` scans, `Tab` cycles), a durable keyboard identity, a command palette (`:`), a help overlay (`?`), incremental search (`/`), and manual refresh (`r`). The map draws only stored `topology_edges` (Nmap-observed or explicitly marked inferred), using a tested 2-by-4 Unicode braille rasterizer with per-edge-type patterns and an ASCII line fallback (`LUMOS_ASCII=1` forces it). Node placement is a deterministic ring layout keyed on a blake2b hash of the node id, so new discoveries never reshuffle existing nodes; the viewport supports zoom (`+`/`-`), pan (`H`/`J`/`K`/`L`), and reset (`0`). The detail sidebar lists addresses, OS, open ports per node, hop distance, review flags, and — for the scanner root — any vantage interfaces saved by `lumos interfaces --save`. Edge selection shows provenance, confidence, and timestamps. The scans tab lists recent scans with status, host counts, elapsed time, and targets, read from a bounded projection of the scans table.
 
 Colour is semantic rather than hard-coded: themes `aurora`, `ember`, and `matrix` degrade to 16-colour palettes, and `NO_COLOR` selects a monochrome theme that keeps hierarchy through weight and reverse video only. `LUMOS_THEME` selects the starting theme. While open, the TUI detects committed database changes from concurrent scans and refreshes the map/status; scan batches become visible after their SQLite commit. The standalone `lumos interfaces` command reads local interface and route information from the installed Nmap's `--iflist` option and provides text or JSON output; it does not scan targets. `lumos interfaces --save` records those interfaces on the engagement's vantage point. The TUI does not launch scans yet. The scan command displays the final Nmap command before execution. User-specified Nmap `-oN` and `-oG` output files are retained alongside Lumos's XML stream. An `-oX` or `-oA` manual option conflicts with XML-on-stdout and is rejected with an explanation.
 
@@ -50,7 +50,7 @@ To run the offline test suite without network access or a real scan:
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-Database creation refuses to overwrite an existing path and sets owner-only permissions. Report output is also created owner-only. Do not commit engagement databases, raw scan XML, or generated reports.
+Database creation refuses to overwrite an existing path and sets owner-only permissions. Report output is also created owner-only. Do not commit engagement databases, raw scan XML, or generated reports. `lumos db upgrade DATABASE` applies forward-only migrations to an existing file in place; the database keeps `application_id` `0x4C554D53` ("LUMS") and `user_version` 2.
 
 ## Data handling and Nmap
 
@@ -58,8 +58,20 @@ Lumos invokes the Nmap executable selected from `PATH` with an argument list and
 
 The database records scan commands, Nmap version, timestamps, operator, interface, vantage point, scope override status, and exit state. Scope rules are engagement-wide; `--network` associates observations with a named network and does not narrow the scope rules. Exact-hostname allow rules are required before hostname preflight resolution.
 
+## Merge identity and schema
+
+The file format is designed for a read-only merge that does not duplicate rows:
+
+- Row ids for networks, addresses, devices, vantage points, topology nodes and edges, tags, scope rules, and review items are UUIDv5 values derived from each row's natural key (`core/ids.py`). Re-importing the same scan or merging the same source twice therefore resolves to the same ids.
+- The engagement itself is identified by `meta.engagement_uid`, derived once from the engagement name and creation timestamp. A merge is only accepted when the source uid matches; every incoming `engagement_id` is then rewritten to the local `engagement.id` while child ids stay unchanged. A different uid is a different engagement and is rejected, never silently rehomed.
+- Devices are deliberately **not** keyed on address or hostname: the same host seen twice stays two devices with a duplicate proposal until a human decides.
+- Schema 2 adds `meta` and `merge_log` (one row per merge attempt, with outcome `applied`, `rejected`, or `dry_run`), plus unique indexes on the natural keys of scope rules, review items, duplicate proposals, topology edges, vantage points, trace paths, script observations, and identity claims. Exact duplicates are collapsed to the earliest row when a v1 file is upgraded.
+- `lumos db upgrade DATABASE` migrates an existing v1 file in place; `lumos db check DATABASE` verifies `application_id`, `user_version`, the table/view set, foreign keys, and integrity.
+
 ## Development status and project hygiene
 
 Phase 1 established the merge-ready schema, migration entry point, database validation, synthetic Nmap XML fixtures, and an offline fake Nmap executable. Phase 2 adds the headless scan/import/report path. CI and unit tests do not run scans or require network access. Python 3.10 and a real Nmap scan have not yet been verified in this environment.
+
+`bench/map_benchmark.py` builds synthetic 10k/100k-host engagements and reports load and frame timings; it is a development tool and needs no network or Nmap access. Results on this machine (Python 3.14.9, 8 CPUs) are recorded in the project plan rather than in CI.
 
 No license has been selected and no `LICENSE` file is included. Select and review a license before public distribution. Nmap is a separate project and trademark; consult its current licensing and trademark terms before release.

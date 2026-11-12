@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .ids import ensure_engagement_uid, read_engagement_uid
 from .schema import APPLICATION_ID, MIGRATIONS, SCHEMA_VERSION
 
 EXPECTED_TABLES = frozenset(
@@ -18,7 +19,7 @@ EXPECTED_TABLES = frozenset(
     script_observations topology_nodes trace_paths trace_hops manual_nodes zones
     zone_memberships topology_edges node_positions human_edits notes tags tag_links
     review_items review_events duplicate_proposals duplicate_proposal_events
-    scope_rules audit_events raw_scan_evidence""".split()
+    scope_rules audit_events raw_scan_evidence meta merge_log""".split()
 )
 EXPECTED_VIEWS = frozenset({"v_device_seen", "v_current_host_observations"})
 
@@ -132,6 +133,7 @@ def validate_database(conn: sqlite3.Connection, *, integrity: bool = False) -> d
     return {
         "application_id": app_id,
         "user_version": version,
+        "engagement_uid": read_engagement_uid(conn),
         "tables": len(EXPECTED_TABLES),
         "views": len(EXPECTED_VIEWS),
         "integrity": integrity_result,
@@ -157,6 +159,7 @@ def initialize_database(path: str | os.PathLike[str], name: str) -> str:
                     "VALUES (?, ?, '', '', ?)",
                     (engagement_id, name, utc_now()),
                 )
+                ensure_engagement_uid(conn)
             validate_database(conn)
         finally:
             conn.close()
@@ -170,6 +173,29 @@ def initialize_database(path: str | os.PathLike[str], name: str) -> str:
             except FileNotFoundError:
                 pass
         raise
+
+
+def upgrade_database(path: str | os.PathLike[str]) -> dict[str, Any]:
+    """Apply forward-only migrations to an existing engagement file.
+
+    Refuses foreign files: application_id and the file layout are validated
+    before any SQL runs, and migrations never execute SQL read from the file.
+    """
+    db_path = Path(path).expanduser().absolute()
+    if not db_path.is_file():
+        raise DatabaseError(f"Database file does not exist: {db_path}")
+    conn = _connect(db_path, readonly=False)
+    try:
+        previous = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        apply_migrations(conn)
+        with conn:
+            ensure_engagement_uid(conn)
+        result = validate_database(conn)
+        result["previous_user_version"] = previous
+        result["engagement_uid"] = read_engagement_uid(conn)
+        return result
+    finally:
+        conn.close()
 
 
 def open_database(path: str | os.PathLike[str], *, readonly: bool = False) -> sqlite3.Connection:
