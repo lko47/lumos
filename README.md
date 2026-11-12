@@ -107,8 +107,15 @@ are deleted, but only when `derived = 1`.
 
 Rendering uses the evidence class: solid for observed and local links, dense
 dots for likely (>= 0.6), sparse dots for weak evidence, and a dashed style for
-manual links. The map, the evidence panel, hub collapsing and SVG report output
-for these classes are not implemented yet.
+manual links. Hubs draw as one node with their member count (`◇ 10.0.0.0/24 ·
+212`), assumed hubs keep the `~`, gateway placeholders draw hollow, and the
+status bar carries a one-line legend that degrades to ASCII.
+
+A hub with more than 50 members collapses: its member nodes and links are not
+selected at all, so a 100,000-host engagement of 400 `/24` networks opens as 401
+nodes and draws a frame in ~28 ms (benchmark below). Expanding a collapsed hub
+on request, the link evidence panel, promote/reject keys and dotted SVG report
+output are not implemented yet.
 
 ## Development status and project hygiene
 

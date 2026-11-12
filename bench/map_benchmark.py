@@ -62,24 +62,19 @@ class RecordingWindow:
 
 
 def build_database(path: Path, hosts: int) -> tuple[str, float]:
+    """Write a fixture shaped like the real thing: ~400 /24 hubs, not a star."""
     started = time.perf_counter()
     engagement_id = initialize_database(path, f"benchmark {hosts} hosts")
     conn = open_database(path)
     try:
         uid = ids.ensure_engagement_uid(conn)
         now = utc_now()
-        scan_id = ids.trace_path_id(uid, "benchmark", 0)  # any stable uuid for the fixture
+        scan_id = ids.trace_path_id(uid, "benchmark", 0)
         vantage_id = ids.vantage_id(uid, "bench-scanner")
         root_id = ids.node_id(uid, "root", vantage_id)
-        network_id = ids.network_id(uid, "lab")
-        traced_edges: list[tuple] = []
-        inferred_edges: list[tuple] = []
+        subnets = max(1, min(400, -(-hosts // 250)))
+        per_subnet = max(1, -(-hosts // subnets))
         with conn:
-            conn.execute(
-                "INSERT INTO networks(id, engagement_id, name, cidr, family, notes, created_at) "
-                "VALUES (?, ?, 'lab', '10.0.0.0/8', 4, '', ?)",
-                (network_id, engagement_id, now),
-            )
             conn.execute(
                 "INSERT INTO vantage_points(id, engagement_id, scanner_name, operator, created_at) "
                 "VALUES (?, ?, 'bench-scanner', 'bench', ?)",
@@ -96,15 +91,56 @@ def build_database(path: Path, hosts: int) -> tuple[str, float]:
                 "VALUES (?, ?, ?, '[]', '[]', ?, '7.99', '', 'bench', ?, ?, 0, 'completed')",
                 (scan_id, engagement_id, vantage_id, '{"requested": ["10.0.0.0/8"], "resolved": []}', now, now),
             )
+            hub_nodes: dict[int, str] = {}
+            for subnet in range(subnets):
+                cidr = f"10.{subnet // 256}.{subnet % 256}.0/24"
+                network_id = ids.network_id(uid, cidr)
+                zone_id = ids.zone_id(uid, network_id, cidr)
+                hub_nodes[subnet] = ids.node_id(uid, "zone", zone_id)
+                conn.execute(
+                    "INSERT INTO networks(id, engagement_id, name, cidr, family, notes, created_at) "
+                    "VALUES (?, ?, ?, ?, 4, 'benchmark', ?)",
+                    (network_id, engagement_id, cidr, cidr, now),
+                )
+                conn.execute(
+                    "INSERT INTO zones(id, engagement_id, name, zone_type, description, author, created_at, "
+                    "derived, cidr, network_id) VALUES (?, ?, ?, 'segment', '', 'lumos', ?, 1, ?, ?)",
+                    (zone_id, engagement_id, cidr, now, cidr, network_id),
+                )
+                conn.execute(
+                    "INSERT INTO topology_nodes(id, engagement_id, kind, entity_id, label, created_at) "
+                    "VALUES (?, ?, 'zone', ?, ?, ?)",
+                    (hub_nodes[subnet], engagement_id, zone_id, cidr, now),
+                )
+            # One local edge per hub: the scanner's own attachment is a fact.
+            conn.executemany(
+                "INSERT INTO topology_edges(id, engagement_id, from_node_id, to_node_id, edge_type, "
+                "source_kind, source_id, confidence, first_observed_at, last_confirmed_at, derived, evidence_json) "
+                "VALUES (?, ?, ?, ?, 'local', 'rule:local_interface', NULL, 1.0, ?, ?, 1, '{}')",
+                [
+                    (
+                        ids.edge_id(uid, root_id, hub, "local", "rule:local_interface"),
+                        engagement_id,
+                        root_id,
+                        hub,
+                        now,
+                        now,
+                    )
+                    for hub in hub_nodes.values()
+                ],
+            )
             for start in range(0, hosts, BATCH):
                 stop = min(hosts, start + BATCH)
                 devices, observations, addresses, obs_addresses, ports, nodes = [], [], [], [], [], []
+                memberships, links = [], []
                 for index in range(start, stop):
-                    octet = index % 65536
-                    address_text = f"10.{(index // 65536) % 256}.{octet // 256}.{octet % 256}"
+                    subnet = min(subnets - 1, index // per_subnet)
+                    host_octet = (index % per_subnet) + 1
+                    address_text = f"10.{subnet // 256}.{subnet % 256}.{host_octet}"
                     device_id = ids.device_id(uid, scan_id, index)
                     observation_id = ids.observation_id(device_id)
-                    address_id = ids.address_id(network_id, "ipv4", address_text)
+                    address_id = ids.address_id(ids.network_id(uid, f"10.{subnet // 256}.{subnet % 256}.0/24"),
+                                                "ipv4", address_text)
                     node_id = ids.node_id(uid, "device", device_id)
                     devices.append((device_id, engagement_id, now))
                     observations.append(
@@ -114,60 +150,50 @@ def build_database(path: Path, hosts: int) -> tuple[str, float]:
                             device_id,
                             now,
                             "up",
-                            "syn-ack",
+                            "arp-response",
                             f"host-{index}.bench.invalid",
                             "Linux 6.x",
                             95,
                             "",
                             0.001,
                             "{}",
+                            "arp-response",
+                            64,
+                            f"02:00:{index // 256:02x}:{index % 256:02x}:00:01",
                         )
                     )
-                    addresses.append((address_id, network_id, "ipv4", address_text, address_text, now))
+                    addresses.append((address_id, ids.network_id(uid, f"10.{subnet // 256}.{subnet % 256}.0/24"),
+                                      "ipv4", address_text, address_text, now))
                     obs_addresses.append((observation_id, address_id, "ipv4"))
                     ports.append((ids.port_observation_id(observation_id, "tcp", 22), observation_id,
                                   "tcp", 22, "open", "ssh", "OpenSSH", "9.9", "", ""))
-                    ports.append((ids.port_observation_id(observation_id, "tcp", 443), observation_id,
-                                  "tcp", 443, "open", "https", "nginx", "1.24", "", ""))
                     nodes.append((node_id, engagement_id, "device", device_id,
                                   f"host-{index}.bench.invalid", now))
-                    if index < hosts * TRACED_FRACTION:
-                        traced_edges.append(
-                            (
-                                ids.edge_id(uid, root_id, node_id, "traceroute", "nmap_xml"),
-                                engagement_id,
-                                root_id,
-                                node_id,
-                                "traceroute",
-                                "nmap_xml",
-                                scan_id,
-                                1.0,
-                                now,
-                                now,
-                            )
+                    memberships.append((ids.zone_id(uid, ids.network_id(
+                        uid, f"10.{subnet // 256}.{subnet % 256}.0/24"),
+                        f"10.{subnet // 256}.{subnet % 256}.0/24"), node_id))
+                    links.append(
+                        (
+                            ids.inferred_edge_id(uid, hub_nodes[subnet], node_id, "on_link_arp"),
+                            engagement_id,
+                            hub_nodes[subnet],
+                            node_id,
+                            "inferred",
+                            "rule:on_link_arp",
+                            0.95,
+                            now,
+                            now,
+                            '{"rule":"on_link_arp","rule_version":1}',
                         )
-                    else:
-                        inferred_edges.append(
-                            (
-                                ids.edge_id(uid, root_id, node_id, "inferred", "inference"),
-                                engagement_id,
-                                root_id,
-                                node_id,
-                                "inferred",
-                                "inference",
-                                scan_id,
-                                0.35,
-                                now,
-                                None,
-                            )
-                        )
+                    )
                 conn.executemany(
                     "INSERT INTO devices(id, engagement_id, created_at) VALUES (?, ?, ?)", devices
                 )
                 conn.executemany(
                     "INSERT INTO host_observations(id, scan_id, device_id, observed_at, reachability, "
-                    "discovery_method, hostname, os_name, os_accuracy, mac_vendor, latency_seconds, raw_host_json) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "discovery_method, hostname, os_name, os_accuracy, mac_vendor, latency_seconds, "
+                    "raw_host_json, reason, reason_ttl, mac) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     observations,
                 )
                 conn.executemany(
@@ -189,12 +215,17 @@ def build_database(path: Path, hosts: int) -> tuple[str, float]:
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     nodes,
                 )
-            conn.executemany(
-                "INSERT INTO topology_edges(id, engagement_id, from_node_id, to_node_id, edge_type, "
-                "source_kind, source_id, confidence, first_observed_at, last_confirmed_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                traced_edges + inferred_edges,
-            )
+                conn.executemany(
+                    "INSERT INTO zone_memberships(zone_id, topology_node_id, author, created_at) "
+                    "VALUES (?, ?, 'lumos', ?)",
+                    [(zone, node, now) for zone, node in memberships],
+                )
+                conn.executemany(
+                    "INSERT INTO topology_edges(id, engagement_id, from_node_id, to_node_id, edge_type, "
+                    "source_kind, source_id, confidence, first_observed_at, last_confirmed_at, derived, "
+                    "evidence_json) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 1, ?)",
+                    links,
+                )
         return engagement_id, time.perf_counter() - started
     finally:
         conn.close()

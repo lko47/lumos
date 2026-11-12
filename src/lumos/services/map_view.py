@@ -12,6 +12,11 @@ from pathlib import Path
 from ..core.database import DatabaseError, open_database
 from ..core.text import sanitize_text
 
+# A hub with more members than this is drawn as one node with a count; asking
+# for a host inside it expands it (that is the next feature), and the bounded
+# query never materialises those member nodes at all.
+_COLLAPSE_MEMBERS = 50
+
 
 
 @dataclass(frozen=True)
@@ -117,13 +122,26 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
         if engagement is None:
             raise DatabaseError("engagement database has no engagement row")
         engagement_id, engagement_name = engagement
+        # Hubs above the collapse threshold are drawn as one node each, and
+        # their member nodes are never selected. Grouping the hidden set once
+        # is far cheaper than a correlated NOT IN over every device row.
         rows = conn.execute(
-            """WITH chosen AS (
-                   SELECT id, engagement_id, kind, label, entity_id
-                   FROM topology_nodes
-                   WHERE engagement_id = ?
-                   ORDER BY CASE kind WHEN 'root' THEN 0 WHEN 'hop' THEN 1
-                             WHEN 'unknown_hop' THEN 2 ELSE 3 END, id
+            """WITH big_zones AS (
+                   SELECT zone_id FROM zone_memberships
+                   GROUP BY zone_id HAVING COUNT(*) > ?
+               ), hidden AS (
+                   SELECT zm.topology_node_id AS node_id, 1 AS hidden
+                   FROM zone_memberships zm
+                   JOIN big_zones bz ON bz.zone_id = zm.zone_id
+                   GROUP BY zm.topology_node_id
+               ), chosen AS (
+                   SELECT tn.id, tn.engagement_id, tn.kind, tn.label, tn.entity_id
+                   FROM topology_nodes tn
+                   LEFT JOIN hidden h ON h.node_id = tn.id
+                   WHERE tn.engagement_id = ?
+                     AND (tn.kind <> 'device' OR h.hidden IS NULL)
+                   ORDER BY CASE tn.kind WHEN 'root' THEN 0 WHEN 'zone' THEN 1
+                             WHEN 'hop' THEN 2 WHEN 'unknown_hop' THEN 3 ELSE 4 END, tn.id
                    LIMIT ?
                ), chosen_devices AS (
                    SELECT entity_id AS device_id FROM chosen WHERE kind = 'device'
@@ -157,7 +175,7 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
                       COALESCE(a.addresses, '') AS addresses,
                       COALESCE(pc.open_ports, 0) AS open_ports,
                       COALESCE(ha.display_value, '') AS hop_address,
-                      (SELECT COUNT(*) FROM zone_memberships zm WHERE zm.topology_node_id = tn.id) AS members,
+                      (SELECT COUNT(*) FROM zone_memberships zm WHERE tn.kind = 'zone' AND zm.zone_id = tn.entity_id) AS members,
                COALESCE((SELECT group_concat(p.port || '/' || p.protocol, ' ')
                                 FROM port_observations p
                                 WHERE p.host_observation_id = l.id AND p.state = 'open'), '') AS ports,
@@ -175,7 +193,7 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
                LEFT JOIN addresses ha ON tn.kind IN ('hop', 'unknown_hop') AND ha.id = tn.entity_id
                ORDER BY CASE tn.kind WHEN 'root' THEN 0 WHEN 'hop' THEN 1 WHEN 'unknown_hop' THEN 2 ELSE 3 END,
                         tn.id""",
-            (engagement_id, max_nodes),
+            (_COLLAPSE_MEMBERS, engagement_id, max_nodes),
         ).fetchall()
 
         # Only links whose *both* ends are visible belong on the map. A temp

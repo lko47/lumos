@@ -10,6 +10,7 @@ from pathlib import Path
 from lumos.core import ids
 from lumos.core.database import initialize_database, open_database, utc_now
 from lumos.core.inference import rebuild_inferred
+from lumos.services.map_view import load_map_snapshot
 from lumos.core.nmap.iflist import InterfaceEntry, InterfaceSnapshot, RouteEntry
 from lumos.core.vantage_store import save_interfaces
 
@@ -368,6 +369,34 @@ class InferenceTests(unittest.TestCase):
         remaining = {row[0] for row in scan.query("SELECT id FROM zones")}
         self.assertIn("user-zone", remaining)
         self.assertNotIn("stale-hub", remaining)
+
+
+class CollapseTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_hub_above_the_threshold_is_one_node_with_a_count(self) -> None:
+        scan = Scenario(Path(self.tmp.name), (eth0(),), BASE_ROUTES)
+        for index in range(60):
+            scan.add_host(f"192.0.2.{index + 2}", reason="arp-response", mac=f"02:00:00:10:00:{index:02x}")
+        rebuild_inferred(scan.db)
+        snapshot = load_map_snapshot(scan.db)
+        hubs = [node for node in snapshot.nodes if node.kind == "zone"]
+        self.assertEqual(len(hubs), 1)
+        self.assertEqual(hubs[0].member_count, 60)
+        self.assertEqual([node.kind for node in snapshot.nodes if node.kind == "device"], [])
+        self.assertEqual(snapshot.not_shown, 60)
+        self.assertEqual([edge.edge_type for edge in snapshot.edges], ["local"])
+
+    def test_small_hub_keeps_its_members_visible(self) -> None:
+        scan = Scenario(Path(self.tmp.name), (eth0(),), BASE_ROUTES)
+        for index in range(5):
+            scan.add_host(f"192.0.2.{index + 2}", reason="syn-ack")
+        rebuild_inferred(scan.db)
+        snapshot = load_map_snapshot(scan.db)
+        self.assertEqual(len([n for n in snapshot.nodes if n.kind == "device"]), 5)
+        self.assertEqual(snapshot.not_shown, 0)
 
 
 if __name__ == "__main__":

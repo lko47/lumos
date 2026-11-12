@@ -75,6 +75,25 @@ def _raster_line(canvas: list[list[str]], start: tuple[int, int], end: tuple[int
             y0 += sy
 
 
+_LAYOUT_CACHE: dict[tuple, dict[str, tuple[int, int]]] = {}
+
+
+def _cached_layout(nodes, width: int, height: int) -> dict[str, tuple[int, int]]:
+    """Layout is deterministic per node set and panel size, so cache it.
+
+    Redraws (keystrokes, spinner ticks, live refreshes that changed nothing on
+    screen) reuse the placement instead of re-hashing every node.
+    """
+    key = (width, height, tuple((node.id, node.kind, node.distance) for node in nodes))
+    cached = _LAYOUT_CACHE.get(key)
+    if cached is None:
+        cached = compute_layout(nodes, width, height)
+        if len(_LAYOUT_CACHE) >= 8:
+            _LAYOUT_CACHE.clear()
+        _LAYOUT_CACHE[key] = cached
+    return cached
+
+
 def _segment_visible(a: tuple[int, int], b: tuple[int, int], width: int, height: int) -> bool:
     return not (
         (a[0] < -2 and b[0] < -2) or (a[0] > width + 2 and b[0] > width + 2)
@@ -171,7 +190,7 @@ def draw_map_panel(
     )
     if ih < 2 or iw < 4:
         return {}, (itop, ileft, ih, iw)
-    positions = compute_layout(snapshot.nodes, iw, ih)
+    positions = _cached_layout(snapshot.nodes, iw, ih)
     projected = {node_id: state.viewport.project(point, iw, ih) for node_id, point in positions.items()}
 
     if unicode_ok:
@@ -182,7 +201,10 @@ def draw_map_panel(
             if start is None or end is None or not _segment_visible(start, end, iw, ih):
                 continue
             style_name = edge_class(edge)
-            canvas = layers.setdefault(style_name, BrailleCanvas(iw, ih))
+            canvas = layers.get(style_name)
+            if canvas is None:
+                canvas = BrailleCanvas(iw, ih)
+                layers[style_name] = canvas
             canvas.draw_line((start[0] * 2 + 1, start[1] * 4 + 2),
                              (end[0] * 2 + 1, end[1] * 4 + 2), style=style_name)
         runs = _braille_runs(layers, iw, ih)
