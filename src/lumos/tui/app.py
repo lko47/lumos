@@ -377,6 +377,24 @@ def _run_event_loop(
             theme_name = _cycle_theme(theme_name, capability)
             styles = theme.init_styles(theme_name, capability)
             state.notify(f"theme {theme_name} — {theme.THEME_DESCRIPTIONS.get(theme_name, '')}")
+        elif key in (ord("o"), ord("O")):
+            rows = snapshot.nodes
+            node = rows[state.selected] if state.selected_kind == "node" and 0 <= state.selected < len(rows) else None
+            if key == ord("O") or node is None or node.kind != "zone":
+                state.expanded_zone = ""
+                state.notify("hubs collapsed")
+            elif state.expanded_zone == node.zone_id:
+                state.expanded_zone = ""
+                state.notify(f"collapsed {node.label}")
+            else:
+                state.expanded_zone = node.zone_id
+                state.notify(f"expanded {node.label}; o again collapses")
+            watcher.expanded_zone = state.expanded_zone
+            try:
+                snapshot = load_map_snapshot(database, expanded_zone=state.expanded_zone)
+                _clamp_selection(state, snapshot)
+            except Exception as exc:
+                state.notify(f"reload failed: {exc}")
         elif key == ord("i"):
             state.show_inferred = not state.show_inferred
             state.notify(
@@ -385,12 +403,12 @@ def _run_event_loop(
         elif key in (ord("p"), ord("x")) and state.selected_kind == "edge":
             _decide_link(database, state, snapshot, key)
             try:
-                snapshot = load_map_snapshot(database)
+                snapshot = load_map_snapshot(database, expanded_zone=state.expanded_zone)
                 _clamp_selection(state, snapshot)
             except Exception:  # keep the previous snapshot on a reload failure
                 pass
         elif key == ord("r"):
-            snapshot = load_map_snapshot(database)
+            snapshot = load_map_snapshot(database, expanded_zone=state.expanded_zone)
             _clamp_selection(state, snapshot)
             state.notify("snapshot reloaded")
         elif key in (10, 13):

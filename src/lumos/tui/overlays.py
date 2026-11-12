@@ -92,7 +92,7 @@ def draw_help(window: Any, styles: dict[str, int], unicode_ok: bool) -> None:
             row += len(entries) + 2
     footer_row = itop + ih - 2
     safe_addstr(window, footer_row, ileft,
-                "Links are Nmap-observed or clearly marked inferred; none are invented.",
+                "Links are observed or marked inferred; p/x decide, i hides, o/O hubs.",
                 iw, _attr(styles, "muted"), unicode_ok=unicode_ok)
     safe_addstr(window, footer_row + 1, ileft,
                 "Press any key to return.", iw, _attr(styles, "accent"), unicode_ok=unicode_ok)

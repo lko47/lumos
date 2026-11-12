@@ -114,7 +114,9 @@ def _validate_schema(conn: sqlite3.Connection) -> None:
         raise DatabaseError(f"Unexpected view set (missing={missing}, extra={extra})")
 
 
-def validate_database(conn: sqlite3.Connection, *, integrity: bool = False) -> dict[str, Any]:
+def validate_database(
+    conn: sqlite3.Connection, *, integrity: bool = False, foreign_keys: bool = True
+) -> dict[str, Any]:
     """Validate a database's product identity and supported schema."""
     app_id = int(conn.execute("PRAGMA application_id").fetchone()[0])
     version = int(conn.execute("PRAGMA user_version").fetchone()[0])
@@ -123,9 +125,10 @@ def validate_database(conn: sqlite3.Connection, *, integrity: bool = False) -> d
     if version != SCHEMA_VERSION:
         raise DatabaseError(f"Unsupported schema version: expected {SCHEMA_VERSION}, got {version}")
     _validate_schema(conn)
-    foreign_key_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
-    if foreign_key_errors:
-        raise DatabaseError(f"Foreign-key check failed ({len(foreign_key_errors)} violations)")
+    if foreign_keys:
+        foreign_key_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if foreign_key_errors:
+            raise DatabaseError(f"Foreign-key check failed ({len(foreign_key_errors)} violations)")
     integrity_result = None
     if integrity:
         integrity_result = str(conn.execute("PRAGMA integrity_check").fetchone()[0])
@@ -206,7 +209,11 @@ def open_database(path: str | os.PathLike[str], *, readonly: bool = False) -> sq
         raise DatabaseError(f"Database file does not exist: {db_path}")
     conn = _connect(db_path, readonly=readonly)
     try:
-        validate_database(conn)
+        # The full foreign-key audit walks every row; on a 300 MB engagement it
+        # costs seconds, so read-only opens (the TUI polls constantly) keep the
+        # identity and schema checks but skip it. Writers and `db check` still
+        # run it.
+        validate_database(conn, foreign_keys=not readonly)
     except Exception:
         conn.close()
         raise

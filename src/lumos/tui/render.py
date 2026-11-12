@@ -54,6 +54,7 @@ class ViewState:
     message_until: float = 0.0
     show_inferred: bool = True
     pending: tuple[str, str] | None = None
+    expanded_zone: str = ""
 
     def notify(self, text: str, seconds: float = 4.0) -> None:
         self.message = sanitize_text(text, max_chars=160)
@@ -163,7 +164,7 @@ def draw_footer(
     hints = (
         ("q", "quit"), ("?", "help"), (":", "palette"), ("m", "map"), ("v", "hosts"),
         ("s", "scans"), ("/", "search"), ("t", "theme"), ("+/-", "zoom"), ("HJKL", "pan"),
-        ("0", "reset"),
+        ("0", "reset"), ("o/O", "hub"),
     )
     x = 1
     for key, text in hints:

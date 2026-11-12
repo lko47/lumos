@@ -34,6 +34,7 @@ class MapNode:
     member_count: int = 0
     assumed: bool = False
     placeholder: bool = False
+    zone_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -110,9 +111,12 @@ class MapSnapshot:
     root_label: str = ""
     root_interfaces: tuple[str, ...] = ()
     not_shown: int = 0
+    expanded_zone: str = ""
 
 
-def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnapshot:
+def load_map_snapshot(
+    database: str | Path, *, max_nodes: int = 2000, expanded_zone: str = ""
+) -> MapSnapshot:
     """Load a bounded read-only map snapshot.
 
     The loader never invents links: every edge comes from ``topology_edges``.
@@ -132,7 +136,7 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
         # is far cheaper than a correlated NOT IN over every device row.
         rows = conn.execute(
             """WITH big_zones AS (
-                   SELECT zone_id FROM zone_memberships
+                   SELECT zone_id FROM zone_memberships WHERE zone_id <> ?
                    GROUP BY zone_id HAVING COUNT(*) > ?
                ), hidden AS (
                    SELECT zm.topology_node_id AS node_id, 1 AS hidden
@@ -198,7 +202,7 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
                LEFT JOIN addresses ha ON tn.kind IN ('hop', 'unknown_hop') AND ha.id = tn.entity_id
                ORDER BY CASE tn.kind WHEN 'root' THEN 0 WHEN 'hop' THEN 1 WHEN 'unknown_hop' THEN 2 ELSE 3 END,
                         tn.id""",
-            (_COLLAPSE_MEMBERS, engagement_id, max_nodes),
+            (expanded_zone, _COLLAPSE_MEMBERS, engagement_id, max_nodes),
         ).fetchall()
 
         # Only links whose *both* ends are visible belong on the map. A temp
@@ -283,6 +287,7 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
                     assumed=label.startswith("~"),
                     placeholder=kind == "unknown_hop"
                     and str(row["entity_id"] or "").startswith("gateway:"),
+                    zone_id=str(row["entity_id"] or "") if kind == "zone" else "",
                 )
             )
 
@@ -323,6 +328,7 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
                 n.member_count,
                 n.assumed,
                 n.placeholder,
+                n.zone_id,
             )
             for n in nodes
         ]
@@ -418,6 +424,7 @@ def load_map_snapshot(database: str | Path, *, max_nodes: int = 2000) -> MapSnap
             root_label=root_label,
             root_interfaces=tuple(root_interfaces),
             not_shown=max(0, int(total_nodes) - len(nodes)),
+            expanded_zone=expanded_zone,
         )
     finally:
         conn.close()
@@ -434,6 +441,7 @@ class MapSnapshotWatcher:
         self._stop = threading.Event()
         self._updates: queue.Queue[MapSnapshot] = queue.Queue(maxsize=1)
         self._error: BaseException | None = None
+        self.expanded_zone = ""
         self._thread = threading.Thread(target=self._run, name="lumos-map-watcher", daemon=True)
 
     @property
@@ -478,7 +486,7 @@ class MapSnapshotWatcher:
                 current = int(conn.execute("PRAGMA data_version").fetchone()[0])
                 if current != version:
                     version = current
-                    self._publish(load_map_snapshot(self.database))
+                    self._publish(load_map_snapshot(self.database, expanded_zone=self.expanded_zone))
         except Exception as exc:
             self._error = exc
         finally:
@@ -515,3 +523,54 @@ def render_plain_snapshot(snapshot: MapSnapshot) -> str:
                 f"first {first}, last confirmed {confirmed}"
             )
     return "\n".join(lines) + "\n"
+
+
+def load_hub_members(
+    database: str | Path, zone_id: str, *, offset: int = 0, limit: int = 50
+) -> tuple[tuple[tuple[str, str, str], ...], int]:
+    """Page one hub's members without materialising a huge flat network.
+
+    Returns ``((label, address, node_id), ...), total``. A /16 with 60,000
+    hosts is one hub; the TUI pages this instead of drawing every member edge.
+    Two queries keep it flat: the page of nodes, then one grouped address
+    lookup for just those devices.
+    """
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+    conn = open_database(database, readonly=True)
+    try:
+        total = conn.execute(
+            "SELECT COUNT(*) FROM zone_memberships WHERE zone_id = ?", (zone_id,)
+        ).fetchone()[0]
+        rows = conn.execute(
+            "SELECT tn.id AS node_id, tn.label AS label, tn.entity_id AS device_id "
+            "FROM zone_memberships zm "
+            "JOIN topology_nodes tn ON tn.id = zm.topology_node_id "
+            "WHERE zm.zone_id = ? ORDER BY tn.label, tn.id LIMIT ? OFFSET ?",
+            (zone_id, int(limit), int(offset)),
+        ).fetchall()
+        device_ids = [str(row["device_id"]) for row in rows if row["device_id"]]
+        addresses: dict[str, str] = {}
+        for start in range(0, len(device_ids), 400):
+            chunk = device_ids[start:start + 400]
+            placeholders = ",".join("?" for _ in chunk)
+            for found in conn.execute(
+                "SELECT h.device_id AS device_id, group_concat(a.display_value, ', ') AS addresses "
+                "FROM host_observations h "
+                "JOIN observation_addresses oa ON oa.host_observation_id = h.id "
+                "JOIN addresses a ON a.id = oa.address_id "
+                f"WHERE h.device_id IN ({placeholders}) GROUP BY h.device_id",
+                chunk,
+            ):
+                addresses[str(found["device_id"])] = str(found["addresses"] or "")
+        members = tuple(
+            (
+                str(row["label"]),
+                addresses.get(str(row["device_id"]), ""),
+                str(row["node_id"]),
+            )
+            for row in rows
+        )
+        return members, int(total)
+    finally:
+        conn.close()

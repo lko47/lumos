@@ -119,9 +119,13 @@ Selecting a link explains it: the sidebar shows the rule, and a plain sentence
 such as "Inferred by on_link_arp: 192.0.2.14 is inside 192.0.2.0/24 on eth0
 and answered ARP. Confidence 0.95." On an inferred link `p` promotes it to a
 manual link (recorded with the author) and `x` rejects it, each after a second
-press; both choices go to `edge_decisions` and survive rebuilds and merges. `i`
-hides or shows inferred links. Expanding a collapsed hub on request is not
-implemented yet.
+press; both choices go to `edge_decisions` and survive rebuilds. `i` hides or
+shows inferred links.
+
+A collapsed hub expands on request: select it and press `o` (`O` collapses all).
+Expansion re-runs the same bounded query with that one hub's members included,
+and `load_hub_members()` pages a hub's member list (label, addresses, node id)
+without materialising the network, so a /16 with 60,000 hosts stays openable.
 
 Reports tell the same truth as the map. `lumos report markdown` lists inferred
 links in their own table with rule and confidence and states that they were not

@@ -418,6 +418,11 @@ def draw_sidebar(
         field(row + 2, "active", str(snapshot.active_scans),
               "scan_running" if snapshot.active_scans else "value")
         return
+    if node.kind == "zone":
+        field(row, "members", str(node.member_count))
+        expanded = bool(snapshot.expanded_zone) and snapshot.expanded_zone == node.zone_id
+        line(row + 2, "O collapse" if expanded else "o expand members", "accent")
+        return
     line(row + 1, f"OPEN PORTS  {node.open_ports}", "muted")
     draw_meter(window, itop + row + 2, ileft, iw, min(1.0, node.open_ports / 20.0), styles,
                unicode_ok=unicode_ok, empty_attr=_attr(styles, "muted"))

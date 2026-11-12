@@ -10,7 +10,7 @@ from pathlib import Path
 from lumos.core import ids
 from lumos.core.database import initialize_database, open_database, utc_now
 from lumos.core.inference import rebuild_inferred
-from lumos.services.map_view import load_map_snapshot
+from lumos.services.map_view import load_hub_members, load_map_snapshot
 from lumos.core.nmap.iflist import InterfaceEntry, InterfaceSnapshot, RouteEntry
 from lumos.core.vantage_store import save_interfaces
 
@@ -388,6 +388,30 @@ class CollapseTests(unittest.TestCase):
         self.assertEqual([node.kind for node in snapshot.nodes if node.kind == "device"], [])
         self.assertEqual(snapshot.not_shown, 60)
         self.assertEqual([edge.edge_type for edge in snapshot.edges], ["local"])
+
+    def test_expanding_a_hub_shows_its_members_on_request(self) -> None:
+        scan = Scenario(Path(self.tmp.name), (eth0(),), BASE_ROUTES)
+        for index in range(60):
+            scan.add_host(f"192.0.2.{index + 2}", reason="arp-response", mac=f"02:00:00:11:00:{index:02x}")
+        rebuild_inferred(scan.db)
+        hub = next(node for node in load_map_snapshot(scan.db).nodes if node.kind == "zone")
+        expanded = load_map_snapshot(scan.db, expanded_zone=hub.zone_id)
+        self.assertEqual(expanded.expanded_zone, hub.zone_id)
+        self.assertEqual(len([n for n in expanded.nodes if n.kind == "device"]), 60)
+        self.assertEqual(len([e for e in expanded.edges if e.edge_type == "inferred"]), 60)
+
+    def test_hub_members_are_paged_not_materialised(self) -> None:
+        scan = Scenario(Path(self.tmp.name), (eth0(),), BASE_ROUTES)
+        for index in range(60):
+            scan.add_host(f"192.0.2.{index + 2}", reason="arp-response", mac=f"02:00:00:12:00:{index:02x}")
+        rebuild_inferred(scan.db)
+        hub = next(node for node in load_map_snapshot(scan.db).nodes if node.kind == "zone")
+        first, total = load_hub_members(scan.db, hub.zone_id, limit=10)
+        self.assertEqual(total, 60)
+        self.assertEqual(len(first), 10)
+        second, _ = load_hub_members(scan.db, hub.zone_id, offset=10, limit=10)
+        self.assertEqual(len(second), 10)
+        self.assertNotEqual({row[2] for row in first}, {row[2] for row in second})
 
     def test_small_hub_keeps_its_members_visible(self) -> None:
         scan = Scenario(Path(self.tmp.name), (eth0(),), BASE_ROUTES)
