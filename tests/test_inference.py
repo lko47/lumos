@@ -11,7 +11,7 @@ from lumos.core import ids
 from lumos.core import schema
 from lumos.core.database import initialize_database, open_database, upgrade_database, utc_now
 from lumos.core.inference import rebuild_inferred
-from lumos.services.map_view import load_hub_members, load_map_snapshot
+from lumos.services.map_view import load_hub_members, load_map_snapshot, ttl_hops
 from lumos.core.nmap.iflist import InterfaceEntry, InterfaceSnapshot, RouteEntry
 from lumos.core.vantage_store import save_interfaces
 
@@ -370,6 +370,41 @@ class InferenceTests(unittest.TestCase):
         remaining = {row[0] for row in scan.query("SELECT id FROM zones")}
         self.assertIn("user-zone", remaining)
         self.assertNotIn("stale-hub", remaining)
+
+
+class VirtualAndTtlTests(unittest.TestCase):
+    def test_ttl_hint_rounds_to_the_usual_initial_values(self) -> None:
+        self.assertIsNone(ttl_hops(None))
+        self.assertIsNone(ttl_hops(0))
+        self.assertEqual(ttl_hops(64), 0)
+        self.assertEqual(ttl_hops(60), 4)
+        self.assertEqual(ttl_hops(30), 2)
+        self.assertEqual(ttl_hops(250), 5)
+        self.assertEqual(ttl_hops(128), 0)
+
+    def test_virtual_bridge_with_no_members_is_hidden(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan = Scenario(
+                Path(tmp),
+                (eth0(), eth0("172.17.0.1/16", name="docker0")),
+                BASE_ROUTES,
+            )
+            scan.add_host("192.0.2.20", reason="arp-response", mac="02:00:00:70:00:01")
+            rebuild_inferred(scan.db)
+            hubs = [n for n in load_map_snapshot(scan.db).nodes if n.kind == "zone"]
+            self.assertEqual([hub.label for hub in hubs], ["192.0.2.0/24"])
+
+    def test_virtual_bridge_appears_once_a_scan_targets_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scan = Scenario(
+                Path(tmp),
+                (eth0(), eth0("172.17.0.1/16", name="docker0")),
+                (RouteEntry(destination="172.17.0.0/16", device="docker0", metric=0, gateway=None),),
+            )
+            scan.add_host("172.17.0.5", reason="arp-response", mac="02:00:00:71:00:01")
+            rebuild_inferred(scan.db)
+            labels = sorted(n.label for n in load_map_snapshot(scan.db).nodes if n.kind == "zone")
+            self.assertIn("172.17.0.0/16", labels)
 
 
 class MigrationTests(unittest.TestCase):

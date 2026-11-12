@@ -99,7 +99,10 @@ keeps its zone membership. Many addresses answering ARP with one MAC are
 treated as suspected proxy ARP: those links are downgraded to addressing
 evidence and one review item names the MAC. Tunnel interfaces never supply ARP
 evidence, and link-local IPv6 or host routes (`/32`, `/128`) never create a
-segment hub.
+segment hub. Virtual bridges (`docker0`, `br-`, `virbr`, `veth*`) are marked
+`virtual` and hidden until a scan puts members on them. A host's status TTL is
+shown in the details panel as an "about N hops" hint (never drawn), and rings
+are labelled *depth*, not hops.
 
 Every derived edge stores its rule, rule version and the row ids it used in
 `evidence_json`; `edge_decisions` records a user's `promoted` or `rejected`

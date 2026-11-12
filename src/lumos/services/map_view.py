@@ -35,6 +35,22 @@ class MapNode:
     assumed: bool = False
     placeholder: bool = False
     zone_id: str = ""
+    ttl_hops: int | None = None
+
+
+def ttl_hops(reason_ttl: int | None) -> int | None:
+    """Estimate router hops from a status TTL, ignoring 0 and unknowns.
+
+    The heuristic rounds the observed TTL up to the usual initial value and
+    subtracts. It is a hint for the details panel, never a drawn edge.
+    """
+    if reason_ttl is None or int(reason_ttl) <= 0:
+        return None
+    value = int(reason_ttl)
+    for initial in (32, 64, 128, 255):
+        if value <= initial:
+            return max(0, initial - value)
+    return None
 
 
 @dataclass(frozen=True)
@@ -149,6 +165,13 @@ def load_map_snapshot(
                    LEFT JOIN hidden h ON h.node_id = tn.id
                    WHERE tn.engagement_id = ?
                      AND (tn.kind <> 'device' OR h.hidden IS NULL)
+                     AND NOT (
+                         tn.kind = 'zone'
+                         AND EXISTS (SELECT 1 FROM zones z
+                                     WHERE z.id = tn.entity_id AND z.zone_type = 'virtual')
+                         AND NOT EXISTS (SELECT 1 FROM zone_memberships zm2
+                                         WHERE zm2.zone_id = tn.entity_id)
+                     )
                    ORDER BY CASE tn.kind WHEN 'root' THEN 0 WHEN 'zone' THEN 1
                              WHEN 'hop' THEN 2 WHEN 'unknown_hop' THEN 3 ELSE 4 END, tn.id
                    LIMIT ?
@@ -180,6 +203,7 @@ def load_map_snapshot(
                       tn.label AS node_label,
                       tn.entity_id AS entity_id,
                       COALESCE(l.hostname, '') AS hostname,
+                      l.reason_ttl AS reason_ttl,
                       COALESCE(l.os_name, '') AS os_name,
                       COALESCE(a.addresses, '') AS addresses,
                       COALESCE(pc.open_ports, 0) AS open_ports,
@@ -288,6 +312,7 @@ def load_map_snapshot(
                     placeholder=kind == "unknown_hop"
                     and str(row["entity_id"] or "").startswith("gateway:"),
                     zone_id=str(row["entity_id"] or "") if kind == "zone" else "",
+                    ttl_hops=ttl_hops(row["reason_ttl"]),
                 )
             )
 
@@ -329,6 +354,7 @@ def load_map_snapshot(
                 n.assumed,
                 n.placeholder,
                 n.zone_id,
+                n.ttl_hops,
             )
             for n in nodes
         ]

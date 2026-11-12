@@ -436,4 +436,6 @@ def draw_sidebar(
         row += 1
     if node.review_count:
         field(row + 1, "review", f"{node.review_count} flag(s)", "error")
-    field(row + 2, "hops", str(node.distance))
+    field(row + 2, "depth", str(node.distance))
+    if node.ttl_hops is not None:
+        field(row + 3, "about", f"{node.ttl_hops} hop(s) by TTL")
