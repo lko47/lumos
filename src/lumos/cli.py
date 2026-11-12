@@ -13,6 +13,7 @@ from typing import Sequence
 
 from . import __version__
 from .core.inference import rebuild_inferred
+from .core.merge import MergeError, merge_engagement
 from .core.database import (
     DatabaseError,
     check_database,
@@ -49,6 +50,13 @@ def _parser() -> argparse.ArgumentParser:
     check.add_argument("path", type=Path)
     upgrade = db_commands.add_parser("upgrade", help="apply forward-only schema migrations in place")
     upgrade.add_argument("path", type=Path)
+    merge = db_commands.add_parser(
+        "merge", help="merge another copy of this engagement into a database"
+    )
+    merge.add_argument("target", type=Path)
+    merge.add_argument("source", type=Path)
+    merge.add_argument("--operator", default="")
+    merge.add_argument("--dry-run", action="store_true", help="count what would be copied, change nothing")
     rebuild = db_commands.add_parser(
         "rebuild", help="derive inferred segment hubs and links from stored facts"
     )
@@ -205,6 +213,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"Upgraded {args.path} from schema {result['previous_user_version']} "
                 f"to {result['user_version']}; engagement uid {result['engagement_uid']}"
             )
+            return 0
+        if args.command == "db" and args.db_command == "merge":
+            stats = merge_engagement(
+                args.target, args.source, operator=args.operator, dry_run=args.dry_run
+            )
+            copied = ", ".join(f"{table} {count}" for table, count in stats.rows.items() if count) or "nothing new"
+            verb = "Would copy" if stats.dry_run else "Merged"
+            print(f"{verb}: {copied}; total {stats.total} rows")
             return 0
         if args.command == "db" and args.db_command == "rebuild":
             stats = rebuild_inferred(args.path)
