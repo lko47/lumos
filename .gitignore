@@ -9,10 +9,15 @@ venv/
 
 # Engagement data and scan artifacts must never enter source control.
 *.sqlite
+*.sqlite-wal
+*.sqlite-shm
 *.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
 *.db
 *.db-wal
 *.db-shm
+*.db-journal
 *.nmap
 *.xml
 /engagements/
