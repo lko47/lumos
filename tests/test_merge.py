@@ -22,7 +22,7 @@ class MergeTests(unittest.TestCase):
         self.scan = Scenario(self.dir, (eth0(),), BASE_ROUTES)
         for index in range(4):
             self.scan.add_host(
-                f"192.0.2.{index + 2}", reason="arp-response", mac=f"02:00:00:60:00:{index:02x}"
+                f"198.51.100.{index + 2}", reason="arp-response", mac=f"02:00:00:60:00:{index:02x}"
             )
         rebuild_inferred(self.scan.db)
 

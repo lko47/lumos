@@ -74,7 +74,7 @@ class InferredReportTests(unittest.TestCase):
         scan = Scenario(self.dir, (eth0(),), BASE_ROUTES)
         for index in range(20):
             scan.add_host(
-                f"192.0.2.{index + 2}", reason="arp-response", mac=f"02:00:00:20:00:{index:02x}"
+                f"198.51.100.{index + 2}", reason="arp-response", mac=f"02:00:00:20:00:{index:02x}"
             )
         rebuild_inferred(scan.db)
         return scan

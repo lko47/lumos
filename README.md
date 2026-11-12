@@ -50,6 +50,13 @@ To run the offline test suite without network access or a real scan:
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
+Every fixture and test uses reserved address space, never a real network: RFC 5737
+documentation ranges (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`), RFC 3849
+`2001:db8::/32`, RFC 2544 benchmarking space (`198.18.0.0/15`) for the synthetic
+scale benchmark, and locally administered MACs (`02:00:…`). `10.0.0.0/24` appears in
+prose only, as the textbook example of two private networks that share a CIDR. No
+engagement database, scan XML, or report is committed.
+
 Database creation refuses to overwrite an existing path and sets owner-only permissions. Report output is also created owner-only. Do not commit engagement databases, raw scan XML, or generated reports. `lumos db upgrade DATABASE` applies forward-only migrations to an existing file in place; the database keeps `application_id` `0x4C554D53` ("LUMS") and `user_version` 3.
 
 ## Data handling and Nmap
@@ -120,7 +127,7 @@ selected at all, so a 100,000-host engagement of 400 `/24` networks opens as 401
 nodes and draws a frame in ~28 ms (benchmark below).
 
 Selecting a link explains it: the sidebar shows the rule, and a plain sentence
-such as "Inferred by on_link_arp: 192.0.2.14 is inside 192.0.2.0/24 on eth0
+such as "Inferred by on_link_arp: 198.51.100.14 is inside 198.51.100.0/24 on eth0
 and answered ARP. Confidence 0.95." On an inferred link `p` promotes it to a
 manual link (recorded with the author) and `x` rejects it, each after a second
 press; both choices go to `edge_decisions` and survive rebuilds. `i` hides or

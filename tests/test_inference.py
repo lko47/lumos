@@ -16,7 +16,7 @@ from lumos.core.nmap.iflist import InterfaceEntry, InterfaceSnapshot, RouteEntry
 from lumos.core.vantage_store import save_interfaces
 
 
-def eth0(address: str = "192.0.2.32/24", name: str = "eth0") -> InterfaceEntry:
+def eth0(address: str = "198.51.100.32/24", name: str = "eth0") -> InterfaceEntry:
     prefix = int(address.rsplit("/", 1)[1])
     return InterfaceEntry(
         name=name,
@@ -146,8 +146,8 @@ class Scenario:
 
 
 BASE_ROUTES = (
-    RouteEntry(destination="192.0.2.0/24", device="eth0", metric=100, gateway=None),
-    RouteEntry(destination="default", device="eth0", metric=100, gateway="192.0.2.1"),
+    RouteEntry(destination="198.51.100.0/24", device="eth0", metric=100, gateway=None),
+    RouteEntry(destination="default", device="eth0", metric=100, gateway="198.51.100.1"),
 )
 
 
@@ -164,7 +164,7 @@ class InferenceTests(unittest.TestCase):
     def test_privileged_sweep_uses_one_hub_and_arp_links(self) -> None:
         scan = self.scenario()
         for index in range(20):
-            scan.add_host(f"192.0.2.{100 + index}", reason="arp-response", mac=f"02:00:00:00:00:{index:02x}")
+            scan.add_host(f"198.51.100.{100 + index}", reason="arp-response", mac=f"02:00:00:00:00:{index:02x}")
         stats = rebuild_inferred(scan.db)
         self.assertEqual(stats.hubs, 1)
         self.assertEqual(stats.local_edges, 1)
@@ -182,7 +182,7 @@ class InferenceTests(unittest.TestCase):
     def test_unprivileged_sweep_falls_back_to_address_evidence(self) -> None:
         scan = self.scenario()
         for index in range(20):
-            scan.add_host(f"192.0.2.{100 + index}", reason="syn-ack")
+            scan.add_host(f"198.51.100.{100 + index}", reason="syn-ack")
         rebuild_inferred(scan.db)
         inferred = [row for row in scan.edges() if row["edge_type"] == "inferred"]
         self.assertEqual(len(inferred), 20)
@@ -191,13 +191,13 @@ class InferenceTests(unittest.TestCase):
 
     def test_routed_target_goes_through_the_gateway(self) -> None:
         scan = self.scenario()
-        scan.add_host("198.51.100.5", reason="syn-ack")
-        scan.add_host("198.51.100.6", reason="syn-ack")
+        scan.add_host("203.0.113.5", reason="syn-ack")
+        scan.add_host("203.0.113.6", reason="syn-ack")
         rebuild_inferred(scan.db)
         edges = scan.edges()
         gateway_edges = [row for row in edges if row["source_kind"] == "rule:gateway_on_link"]
         self.assertEqual(len(gateway_edges), 1)
-        self.assertIn("192.0.2.1", gateway_edges[0]["to_label"])
+        self.assertIn("198.51.100.1", gateway_edges[0]["to_label"])
         self.assertEqual(gateway_edges[0]["confidence"], 0.9)
         hub_edges = [
             row for row in edges if row["source_kind"] == "rule:routed_via_gateway"
@@ -205,7 +205,7 @@ class InferenceTests(unittest.TestCase):
         ]
         self.assertEqual(len(hub_edges), 1)
         self.assertEqual(hub_edges[0]["confidence"], 0.5)
-        self.assertTrue(hub_edges[0]["to_label"].startswith("~198.51.100.0/24"))
+        self.assertTrue(hub_edges[0]["to_label"].startswith("~203.0.113.0/24"))
         host_edges = [
             row for row in edges if row["source_kind"] == "rule:routed_via_gateway"
             and row["to_kind"] == "device"
@@ -228,8 +228,8 @@ class InferenceTests(unittest.TestCase):
 
     def test_observed_path_suppresses_the_inferred_link_only(self) -> None:
         scan = self.scenario()
-        traced, _ = scan.add_host("192.0.2.50", reason="arp-response", mac="02:00:00:00:00:aa")
-        plain, _ = scan.add_host("192.0.2.51", reason="arp-response", mac="02:00:00:00:00:bb")
+        traced, _ = scan.add_host("198.51.100.50", reason="arp-response", mac="02:00:00:00:00:aa")
+        plain, _ = scan.add_host("198.51.100.51", reason="arp-response", mac="02:00:00:00:00:bb")
         # Record a traceroute path for the first host.
         conn = open_database(scan.db, readonly=False)
         try:
@@ -246,12 +246,12 @@ class InferenceTests(unittest.TestCase):
                 ).fetchone()[0]
                 conn.execute(
                     "INSERT INTO trace_hops(id, trace_path_id, hop_number, address_text, responded) "
-                    "VALUES (?, ?, 1, '192.0.2.1', 1)",
+                    "VALUES (?, ?, 1, '198.51.100.1', 1)",
                     (ids.trace_hop_id(path_id, 1), path_id),
                 )
                 conn.execute(
                     "INSERT INTO trace_hops(id, trace_path_id, hop_number, address_text, responded) "
-                    "VALUES (?, ?, 2, '192.0.2.50', 1)",
+                    "VALUES (?, ?, 2, '198.51.100.50', 1)",
                     (ids.trace_hop_id(path_id, 2), path_id),
                 )
                 conn.execute("UPDATE trace_paths SET root_node_id = ? WHERE id = ?", (root, path_id))
@@ -260,14 +260,14 @@ class InferenceTests(unittest.TestCase):
         rebuild_inferred(scan.db)
         host_edges = [row for row in scan.edges() if row["to_kind"] == "device"]
         self.assertEqual(len(host_edges), 1)
-        self.assertIn("192.0.2.51", host_edges[0]["to_label"])
+        self.assertIn("198.51.100.51", host_edges[0]["to_label"])
         memberships = scan.query("SELECT COUNT(*) FROM zone_memberships WHERE topology_node_id IN (?, ?)", (traced, plain))
         self.assertEqual(memberships[0][0], 2)
 
     def test_rebuild_is_deterministic_and_confirms_instead_of_duplicating(self) -> None:
         scan = self.scenario()
         for index in range(5):
-            scan.add_host(f"192.0.2.{100 + index}", reason="arp-response", mac=f"02:00:00:00:01:{index:02x}")
+            scan.add_host(f"198.51.100.{100 + index}", reason="arp-response", mac=f"02:00:00:00:01:{index:02x}")
         rebuild_inferred(scan.db)
         first = [(row["edge_type"], row["from_label"], row["to_label"], row["confidence"]) for row in scan.edges()]
         stamp = scan.query("SELECT first_observed_at, last_confirmed_at FROM topology_edges LIMIT 1")[0]
@@ -280,7 +280,7 @@ class InferenceTests(unittest.TestCase):
 
     def test_rejected_edge_stays_gone_across_rebuilds(self) -> None:
         scan = self.scenario()
-        node, _ = scan.add_host("192.0.2.100", reason="arp-response", mac="02:00:00:00:02:00")
+        node, _ = scan.add_host("198.51.100.100", reason="arp-response", mac="02:00:00:00:02:00")
         rebuild_inferred(scan.db)
         edge = scan.query(
             "SELECT id FROM topology_edges WHERE edge_type = 'inferred' LIMIT 1"
@@ -302,7 +302,7 @@ class InferenceTests(unittest.TestCase):
         scan = self.scenario()
         for index in range(30):
             scan.add_host(
-                f"192.0.2.{10 + index}", reason="arp-response", mac="02:00:00:00:03:00"
+                f"198.51.100.{10 + index}", reason="arp-response", mac="02:00:00:00:03:00"
             )
         rebuild_inferred(scan.db)
         inferred = [row for row in scan.edges() if row["edge_type"] == "inferred"]
@@ -315,10 +315,10 @@ class InferenceTests(unittest.TestCase):
 
     def test_tunnel_interface_never_claims_arp_evidence(self) -> None:
         scan = self.scenario(
-            interfaces=(eth0("192.0.2.32/24"), eth0("10.8.0.2/24", name="tun0")),
-            routes=(RouteEntry(destination="10.8.0.0/24", device="tun0", metric=50, gateway=None),),
+            interfaces=(eth0("198.51.100.32/24"), eth0("198.18.0.2/24", name="tun0")),
+            routes=(RouteEntry(destination="198.18.0.0/24", device="tun0", metric=50, gateway=None),),
         )
-        scan.add_host("10.8.0.9", reason="arp-response", mac="02:00:00:00:04:00")
+        scan.add_host("198.18.0.9", reason="arp-response", mac="02:00:00:00:04:00")
         rebuild_inferred(scan.db)
         inferred = [row for row in scan.edges() if row["edge_type"] == "inferred"]
         self.assertEqual(len(inferred), 1)
@@ -340,14 +340,14 @@ class InferenceTests(unittest.TestCase):
         # Two engagements naming the same CIDR in different networks must not
         # share a hub id; identical inputs must always derive the same id.
         uid = ids.engagement_uid("engagement", "2026-11-11T00:00:00Z")
-        first = ids.zone_id(uid, "network-a", "10.0.0.0/24")
-        second = ids.zone_id(uid, "network-b", "10.0.0.0/24")
+        first = ids.zone_id(uid, "network-a", "203.0.113.0/24")
+        second = ids.zone_id(uid, "network-b", "203.0.113.0/24")
         self.assertNotEqual(first, second)
-        self.assertEqual(first, ids.zone_id(uid, "network-a", "10.0.0.0/24"))
+        self.assertEqual(first, ids.zone_id(uid, "network-a", "203.0.113.0/24"))
 
     def test_rebuild_removes_stale_derived_hubs_but_keeps_user_zones(self) -> None:
         scan = self.scenario()
-        scan.add_host("192.0.2.100", reason="syn-ack")
+        scan.add_host("198.51.100.100", reason="syn-ack")
         rebuild_inferred(scan.db)
         conn = open_database(scan.db, readonly=False)
         try:
@@ -386,25 +386,25 @@ class VirtualAndTtlTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             scan = Scenario(
                 Path(tmp),
-                (eth0(), eth0("172.17.0.1/16", name="docker0")),
+                (eth0(), eth0("198.19.0.1/16", name="docker0")),
                 BASE_ROUTES,
             )
-            scan.add_host("192.0.2.20", reason="arp-response", mac="02:00:00:70:00:01")
+            scan.add_host("198.51.100.20", reason="arp-response", mac="02:00:00:70:00:01")
             rebuild_inferred(scan.db)
             hubs = [n for n in load_map_snapshot(scan.db).nodes if n.kind == "zone"]
-            self.assertEqual([hub.label for hub in hubs], ["192.0.2.0/24"])
+            self.assertEqual([hub.label for hub in hubs], ["198.51.100.0/24"])
 
     def test_virtual_bridge_appears_once_a_scan_targets_it(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             scan = Scenario(
                 Path(tmp),
-                (eth0(), eth0("172.17.0.1/16", name="docker0")),
-                (RouteEntry(destination="172.17.0.0/16", device="docker0", metric=0, gateway=None),),
+                (eth0(), eth0("198.19.0.1/16", name="docker0")),
+                (RouteEntry(destination="198.19.0.0/16", device="docker0", metric=0, gateway=None),),
             )
-            scan.add_host("172.17.0.5", reason="arp-response", mac="02:00:00:71:00:01")
+            scan.add_host("198.19.0.5", reason="arp-response", mac="02:00:00:71:00:01")
             rebuild_inferred(scan.db)
             labels = sorted(n.label for n in load_map_snapshot(scan.db).nodes if n.kind == "zone")
-            self.assertIn("172.17.0.0/16", labels)
+            self.assertIn("198.19.0.0/16", labels)
 
 
 class MigrationTests(unittest.TestCase):
@@ -442,7 +442,7 @@ class MigrationTests(unittest.TestCase):
             )
             raw.execute(
                 "INSERT INTO vantage_interfaces(id, vantage_point_id, name, address, mac, is_up, captured_at) "
-                "VALUES ('i', 'v', 'eth0', '192.0.2.32/24', '', 1, ?)",
+                "VALUES ('i', 'v', 'eth0', '198.51.100.32/24', '', 1, ?)",
                 (now,),
             )
             raw.execute(
@@ -519,7 +519,7 @@ class CollapseTests(unittest.TestCase):
     def test_hub_above_the_threshold_is_one_node_with_a_count(self) -> None:
         scan = Scenario(Path(self.tmp.name), (eth0(),), BASE_ROUTES)
         for index in range(60):
-            scan.add_host(f"192.0.2.{index + 2}", reason="arp-response", mac=f"02:00:00:10:00:{index:02x}")
+            scan.add_host(f"198.51.100.{index + 2}", reason="arp-response", mac=f"02:00:00:10:00:{index:02x}")
         rebuild_inferred(scan.db)
         snapshot = load_map_snapshot(scan.db)
         hubs = [node for node in snapshot.nodes if node.kind == "zone"]
@@ -532,7 +532,7 @@ class CollapseTests(unittest.TestCase):
     def test_expanding_a_hub_shows_its_members_on_request(self) -> None:
         scan = Scenario(Path(self.tmp.name), (eth0(),), BASE_ROUTES)
         for index in range(60):
-            scan.add_host(f"192.0.2.{index + 2}", reason="arp-response", mac=f"02:00:00:11:00:{index:02x}")
+            scan.add_host(f"198.51.100.{index + 2}", reason="arp-response", mac=f"02:00:00:11:00:{index:02x}")
         rebuild_inferred(scan.db)
         hub = next(node for node in load_map_snapshot(scan.db).nodes if node.kind == "zone")
         expanded = load_map_snapshot(scan.db, expanded_zone=hub.zone_id)
@@ -543,7 +543,7 @@ class CollapseTests(unittest.TestCase):
     def test_hub_members_are_paged_not_materialised(self) -> None:
         scan = Scenario(Path(self.tmp.name), (eth0(),), BASE_ROUTES)
         for index in range(60):
-            scan.add_host(f"192.0.2.{index + 2}", reason="arp-response", mac=f"02:00:00:12:00:{index:02x}")
+            scan.add_host(f"198.51.100.{index + 2}", reason="arp-response", mac=f"02:00:00:12:00:{index:02x}")
         rebuild_inferred(scan.db)
         hub = next(node for node in load_map_snapshot(scan.db).nodes if node.kind == "zone")
         first, total = load_hub_members(scan.db, hub.zone_id, limit=10)
@@ -556,7 +556,7 @@ class CollapseTests(unittest.TestCase):
     def test_small_hub_keeps_its_members_visible(self) -> None:
         scan = Scenario(Path(self.tmp.name), (eth0(),), BASE_ROUTES)
         for index in range(5):
-            scan.add_host(f"192.0.2.{index + 2}", reason="syn-ack")
+            scan.add_host(f"198.51.100.{index + 2}", reason="syn-ack")
         rebuild_inferred(scan.db)
         snapshot = load_map_snapshot(scan.db)
         self.assertEqual(len([n for n in snapshot.nodes if n.kind == "device"]), 5)

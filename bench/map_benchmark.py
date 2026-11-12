@@ -89,11 +89,11 @@ def build_database(path: Path, hosts: int) -> tuple[str, float]:
                 "INSERT INTO scans(id, engagement_id, vantage_point_id, exact_args_json, redacted_args_json, "
                 "targets_json, nmap_version, interface, operator, started_at, ended_at, exit_code, status) "
                 "VALUES (?, ?, ?, '[]', '[]', ?, '7.99', '', 'bench', ?, ?, 0, 'completed')",
-                (scan_id, engagement_id, vantage_id, '{"requested": ["10.0.0.0/8"], "resolved": []}', now, now),
+                (scan_id, engagement_id, vantage_id, '{"requested": ["198.18.0.0/15"], "resolved": []}', now, now),
             )
             hub_nodes: dict[int, str] = {}
             for subnet in range(subnets):
-                cidr = f"10.{subnet // 256}.{subnet % 256}.0/24"
+                cidr = f"198.{18 + subnet // 256}.{subnet % 256}.0/24"  # RFC 2544 benchmarking range
                 network_id = ids.network_id(uid, cidr)
                 zone_id = ids.zone_id(uid, network_id, cidr)
                 hub_nodes[subnet] = ids.node_id(uid, "zone", zone_id)
@@ -136,10 +136,10 @@ def build_database(path: Path, hosts: int) -> tuple[str, float]:
                 for index in range(start, stop):
                     subnet = min(subnets - 1, index // per_subnet)
                     host_octet = (index % per_subnet) + 1
-                    address_text = f"10.{subnet // 256}.{subnet % 256}.{host_octet}"
+                    address_text = f"198.{18 + subnet // 256}.{subnet % 256}.{host_octet}"
                     device_id = ids.device_id(uid, scan_id, index)
                     observation_id = ids.observation_id(device_id)
-                    address_id = ids.address_id(ids.network_id(uid, f"10.{subnet // 256}.{subnet % 256}.0/24"),
+                    address_id = ids.address_id(ids.network_id(uid, f"198.{18 + subnet // 256}.{subnet % 256}.0/24"),
                                                 "ipv4", address_text)
                     node_id = ids.node_id(uid, "device", device_id)
                     devices.append((device_id, engagement_id, now))
@@ -162,16 +162,17 @@ def build_database(path: Path, hosts: int) -> tuple[str, float]:
                             f"02:00:{index // 256:02x}:{index % 256:02x}:00:01",
                         )
                     )
-                    addresses.append((address_id, ids.network_id(uid, f"10.{subnet // 256}.{subnet % 256}.0/24"),
+                    addresses.append((address_id, ids.network_id(uid, f"198.{18 + subnet // 256}.{subnet % 256}.0/24"),
                                       "ipv4", address_text, address_text, now))
                     obs_addresses.append((observation_id, address_id, "ipv4"))
                     ports.append((ids.port_observation_id(observation_id, "tcp", 22), observation_id,
                                   "tcp", 22, "open", "ssh", "OpenSSH", "9.9", "", ""))
                     nodes.append((node_id, engagement_id, "device", device_id,
                                   f"host-{index}.bench.invalid", now))
-                    memberships.append((ids.zone_id(uid, ids.network_id(
-                        uid, f"10.{subnet // 256}.{subnet % 256}.0/24"),
-                        f"10.{subnet // 256}.{subnet % 256}.0/24"), node_id))
+                    host_cidr = f"198.{18 + subnet // 256}.{subnet % 256}.0/24"
+                    memberships.append(
+                        (ids.zone_id(uid, ids.network_id(uid, host_cidr), host_cidr), node_id)
+                    )
                     links.append(
                         (
                             ids.inferred_edge_id(uid, hub_nodes[subnet], node_id, "on_link_arp"),

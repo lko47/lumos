@@ -19,7 +19,7 @@ class DecisionTests(unittest.TestCase):
         self.scan = Scenario(Path(self.tmp.name), (eth0(),), BASE_ROUTES)
         for index in range(3):
             self.scan.add_host(
-                f"192.0.2.{index + 2}", reason="arp-response", mac=f"02:00:00:40:00:{index:02x}"
+                f"198.51.100.{index + 2}", reason="arp-response", mac=f"02:00:00:40:00:{index:02x}"
             )
         rebuild_inferred(self.scan.db)
 
@@ -75,19 +75,19 @@ class DescribeEdgeTests(unittest.TestCase):
     def test_arp_sentence_names_the_address_network_and_interface(self) -> None:
         text = describe_edge(
             "on_link_arp",
-            {"address": "192.0.2.14", "cidr": "192.0.2.0/24", "interface": "eth0", "reason": "arp-response"},
+            {"address": "198.51.100.14", "cidr": "198.51.100.0/24", "interface": "eth0", "reason": "arp-response"},
             0.95,
         )
         self.assertEqual(
             text,
-            "Inferred by on_link_arp: 192.0.2.14 is inside 192.0.2.0/24 on eth0 and answered ARP. "
+            "Inferred by on_link_arp: 198.51.100.14 is inside 198.51.100.0/24 on eth0 and answered ARP. "
             "Confidence 0.95.",
         )
 
     def test_address_only_sentence_says_there_was_no_arp(self) -> None:
         text = describe_edge(
             "on_link_address",
-            {"address": "192.0.2.15", "cidr": "192.0.2.0/24", "interface": "eth0"},
+            {"address": "198.51.100.15", "cidr": "198.51.100.0/24", "interface": "eth0"},
             0.70,
         )
         self.assertIn("no ARP or MAC evidence", text)
@@ -96,11 +96,11 @@ class DescribeEdgeTests(unittest.TestCase):
     def test_assumed_prefix_is_stated(self) -> None:
         text = describe_edge(
             "routed_via_gateway",
-            {"cidr": "198.51.100.0/24", "gateway": "192.0.2.1", "assumed_prefix": True},
+            {"cidr": "203.0.113.0/24", "gateway": "198.51.100.1", "assumed_prefix": True},
             0.40,
         )
         self.assertIn("assumed", text)
-        self.assertIn("192.0.2.1", text)
+        self.assertIn("198.51.100.1", text)
 
     def test_unknown_path_sentence_is_honest(self) -> None:
         text = describe_edge("unknown_path", {"cidr": "192.0.2.0/24"}, 0.20)
@@ -110,7 +110,7 @@ class DescribeEdgeTests(unittest.TestCase):
     def test_local_interface_is_called_local_not_inferred(self) -> None:
         text = describe_edge(
             "local_interface",
-            {"address": "192.0.2.32/24", "cidr": "192.0.2.0/24", "interface": "eth0"},
+            {"address": "198.51.100.32/24", "cidr": "198.51.100.0/24", "interface": "eth0"},
             1.0,
         )
         self.assertTrue(text.startswith("Local by local_interface"))
