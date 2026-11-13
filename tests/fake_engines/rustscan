@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+"""Stand-in for rustscan: greppable output."""
+
+import sys
+
+print("192.0.2.60 -> [22, 443]", flush=True)
+print("192.0.2.61 -> [8080]", flush=True)
+sys.exit(0)

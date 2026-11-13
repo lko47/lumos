@@ -13,6 +13,7 @@ from lumos.core.database import initialize_database
 from lumos.core.scope_store import add_scope_rule
 
 FAKE_DIR = Path(__file__).parent / "fake_masscan"
+BIN_DIR = Path(__file__).parent / "fake_engines"
 
 
 class EngineScanTests(unittest.TestCase):
@@ -20,13 +21,14 @@ class EngineScanTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        self.path_dirs = f"{BIN_DIR}{os.pathsep}{FAKE_DIR}"
         self.database = self.root / "engine.sqlite"
         initialize_database(self.database, "engine test")
         add_scope_rule(self.database, "lab", "192.0.2.0/24", included=True)
         self.marker = self.root / "invoked"
         patcher = mock.patch.dict(
             os.environ,
-            {"PATH": f"{FAKE_DIR}{os.pathsep}{os.environ.get('PATH', '')}",
+            {"PATH": f"{self.path_dirs}{os.pathsep}{os.environ.get('PATH', '')}",
              "FAKE_MASSCAN_MARKER": str(self.marker)},
         )
         patcher.start()
@@ -53,10 +55,10 @@ class EngineScanTests(unittest.TestCase):
                 engine_scan.scan_with_engine(self.database, "lab", "masscan", "192.0.2.40")
         self.assertIn("not installed", str(caught.exception))
 
-    def test_naabu_is_refused_until_its_output_can_be_read(self) -> None:
-        with mock.patch.object(engines, "which", return_value="/usr/bin/naabu"):
+    def test_an_engine_without_an_importer_is_refused(self) -> None:
+        with mock.patch.object(engines, "which", return_value="/usr/bin/nmap"):
             with self.assertRaises(engine_scan.EngineScanError) as caught:
-                engine_scan.scan_with_engine(self.database, "lab", "naabu", "192.0.2.40")
+                engine_scan.scan_with_engine(self.database, "lab", "nmap", "192.0.2.40")
         self.assertIn("not imported yet", str(caught.exception))
 
     def test_argv_is_a_list_without_a_shell(self) -> None:
@@ -105,6 +107,68 @@ class CommandLineTests(unittest.TestCase):
         from lumos import cli
 
         self.assertEqual(cli._run_engine_scan(self._args("203.0.113.5")), 1)
+
+
+class JsonAndGreppableEngineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.database = Path(self.tmp.name) / "engines.sqlite"
+        initialize_database(self.database, "engines")
+        add_scope_rule(self.database, "lab", "192.0.2.0/24", included=True)
+        patcher = mock.patch.dict(
+            os.environ,
+            {"PATH": f"{BIN_DIR}{os.pathsep}{FAKE_DIR}{os.pathsep}{os.environ.get('PATH', '')}"},
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _ports(self) -> list[int]:
+        import sqlite3
+
+        with sqlite3.connect(self.database) as connection:
+            rows = connection.execute(
+                "SELECT port FROM port_observations WHERE state = 'open' ORDER BY port"
+            ).fetchall()
+        return [row[0] for row in rows]
+
+    def test_naabu_json_lines_become_observations(self) -> None:
+        _scan_id, hosts, _message = engine_scan.scan_with_engine(
+            self.database, "lab", "naabu", "192.0.2.50"
+        )
+        self.assertEqual(hosts, 1)
+        self.assertEqual(self._ports(), [22, 8080])
+
+    def test_naabu_garbage_lines_are_ignored(self) -> None:
+        records = engine_scan.naabu_records(
+            '{"ip":"192.0.2.50","port":22}\nnot json\n{"ip":"192.0.2.50","port":"x"}'
+        )
+        self.assertEqual(records, [{"address": "192.0.2.50", "port": 22, "protocol": "tcp"}])
+
+    def test_rustscan_greppable_lines_become_observations(self) -> None:
+        _scan_id, hosts, _message = engine_scan.scan_with_engine(
+            self.database, "lab", "rustscan", "192.0.2.60"
+        )
+        self.assertEqual(hosts, 2)
+        self.assertEqual(self._ports(), [22, 443, 8080])
+
+    def test_empty_discovery_is_an_error_not_an_empty_scan(self) -> None:
+        with mock.patch.object(engine_scan, "run_engine_capture", return_value=(0, "", "")):
+            with self.assertRaises(engine_scan.EngineScanError) as caught:
+                engine_scan.scan_with_engine(self.database, "lab", "naabu", "192.0.2.50")
+        self.assertIn("found no open ports", str(caught.exception))
+
+    def test_the_tool_that_produced_the_ports_is_recorded(self) -> None:
+        import sqlite3
+
+        scan_id, _hosts, _message = engine_scan.scan_with_engine(
+            self.database, "lab", "naabu", "192.0.2.50"
+        )
+        with sqlite3.connect(self.database) as connection:
+            args = connection.execute(
+                "SELECT redacted_args_json FROM scans WHERE id = ?", (scan_id,)
+            ).fetchone()[0]
+        self.assertIn("naabu", args)
 
 
 if __name__ == "__main__":

@@ -108,7 +108,10 @@ def _parser() -> argparse.ArgumentParser:
     scan.add_argument("--yes", action="store_true", help="confirm the displayed Nmap command without a prompt")
     scan.add_argument(
         "--engine", default="nmap",
-        help="enumerator to use: nmap (default) or masscan; masscan needs raw-socket privileges",
+        help=(
+            "enumerator: nmap (default), masscan, naabu or rustscan; "
+            "masscan needs raw-socket privileges, naabu/rustscan report ports only"
+        ),
     )
     scan.add_argument("--engine-ports", default="", help="port list for a non-Nmap engine")
     scan.add_argument("--engine-rate", type=int, default=1000, help="packets/second for a non-Nmap engine")

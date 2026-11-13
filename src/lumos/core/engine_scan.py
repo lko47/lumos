@@ -14,6 +14,8 @@ Three rules hold here and are enforced by tests:
 
 from __future__ import annotations
 
+import json
+import re
 import subprocess
 import tempfile
 from dataclasses import dataclass
@@ -28,6 +30,10 @@ from .xml_import import import_nmap_xml
 ENGINE_TIMEOUT_SECONDS = 1800
 MASSCAN_DEFAULT_RATE = 1000
 SUPPORTED_XML_ENGINES = frozenset({"masscan"})
+JSON_LINE_ENGINES = frozenset({"naabu"})
+GREPPABLE_ENGINES = frozenset({"rustscan"})
+XML_ESCAPE = {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}
+RUSTSCAN_LINE = re.compile(r"^(?P<host>[^\s]+)\s*->\s*\[(?P<ports>[0-9,\s]*)\]")
 
 
 @dataclass(frozen=True)
@@ -62,14 +68,107 @@ def masscan_argv(binary: str, target: str, ports: str, output_path: Path, rate: 
     ]
 
 
+def naabu_argv(binary: str, target: str, ports: str) -> list[str]:
+    """naabu prints one JSON object per open port on stdout."""
+    argv = [binary, "-host", target, "-silent", "-json"]
+    if ports:
+        argv += ["-p", _ports_argument(ports)]
+    return argv
+
+
+def rustscan_argv(binary: str, target: str, ports: str) -> list[str]:
+    """rustscan --greppable prints ``host -> [ports]`` lines."""
+    argv = [binary, "-a", target, "--greppable"]
+    if ports:
+        argv += ["-p", _ports_argument(ports)]
+    return argv
+
+
 def build_argv(engine: engines.Engine, binary: str, target: str, ports: str,
                output_path: Path, rate: int = MASSCAN_DEFAULT_RATE) -> list[str]:
-    """Argument list for an engine; only engines with an XML writer are accepted."""
-    if engine.name not in SUPPORTED_XML_ENGINES:
-        raise EngineScanError(
-            f"{engine.name} output is not imported yet; only masscan XML is wired"
-        )
-    return masscan_argv(binary, target, ports, output_path, rate)
+    """Argument list for an engine, in the shape its output format needs."""
+    if engine.name in SUPPORTED_XML_ENGINES:
+        return masscan_argv(binary, target, ports, output_path, rate)
+    if engine.name in JSON_LINE_ENGINES:
+        return naabu_argv(binary, target, ports)
+    if engine.name in GREPPABLE_ENGINES:
+        return rustscan_argv(binary, target, ports)
+    raise EngineScanError(f"{engine.name} output is not imported yet")
+
+
+def naabu_records(output: str) -> list[dict]:
+    """Parse naabu's JSON-lines output, ignoring anything malformed."""
+    records = []
+    for line in output.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            item = json.loads(stripped)
+        except ValueError:
+            continue
+        if not isinstance(item, dict):
+            continue
+        address = str(item.get("ip") or item.get("host") or "").strip()
+        try:
+            port = int(item.get("port"))
+        except (TypeError, ValueError):
+            continue
+        if not address or not 0 < port < 65536:
+            continue
+        records.append({"address": address, "port": port,
+                        "protocol": str(item.get("protocol") or "tcp").lower()})
+    return records
+
+
+def rustscan_records(output: str) -> list[dict]:
+    """Parse rustscan's greppable ``host -> [22,80]`` lines."""
+    records = []
+    for line in output.splitlines():
+        match = RUSTSCAN_LINE.match(line.strip())
+        if not match:
+            continue
+        address = match.group("host").strip()
+        for piece in match.group("ports").split(","):
+            piece = piece.strip()
+            if not piece.isdigit():
+                continue
+            port = int(piece)
+            if 0 < port < 65536:
+                records.append({"address": address, "port": port, "protocol": "tcp"})
+    return records
+
+
+def _escape(value: str) -> str:
+    for needle, replacement in XML_ESCAPE.items():
+        value = value.replace(needle, replacement)
+    return value
+
+
+def records_to_xml(records: list[dict], scanner: str, argv: list[str]) -> str:
+    """Render port records as the Nmap-shaped XML the importer already reads.
+
+    One evidence path beats three: whatever discovered the port, the file that
+    enters the database has the same shape, and <nmaprun> records which tool
+    produced it.
+    """
+    hosts: dict[str, list[dict]] = {}
+    for record in records:
+        hosts.setdefault(record["address"], []).append(record)
+    lines = ['<?xml version="1.0"?>',
+             f'<nmaprun scanner="{_escape(scanner)}" start="0" version="{_escape(scanner)}" '
+             f'xmloutputversion="1.03" args="{_escape(" ".join(argv))}">']
+    for address in sorted(hosts):
+        lines.append(f'<host><address addr="{_escape(address)}" addrtype="ipv4"/><ports>')
+        for record in sorted(hosts[address], key=lambda item: item["port"]):
+            protocol = _escape(record.get("protocol") or "tcp")
+            lines.append(
+                f'<port protocol="{protocol}" portid="{record["port"]}">'
+                f'<state state="open" reason="{_escape(scanner)}" reason_ttl="0"/></port>'
+            )
+        lines.append("</ports></host>")
+    lines.append("</nmaprun>")
+    return "\n".join(lines) + "\n"
 
 
 def check_engine_target(database: str | Path, network: str, target: str) -> None:
@@ -103,6 +202,21 @@ def run_engine(argv: list[str], *, timeout: int = ENGINE_TIMEOUT_SECONDS) -> tup
     return completed.returncode, log.strip()[-2000:]
 
 
+def run_engine_capture(argv: list[str], *, timeout: int = ENGINE_TIMEOUT_SECONDS) -> tuple[int, str, str]:
+    """Run an engine whose report goes to stdout; returns (code, log, stdout)."""
+    try:
+        completed = subprocess.run(
+            argv, capture_output=True, text=True, timeout=timeout, check=False, shell=False
+        )
+    except FileNotFoundError as exc:
+        raise EngineScanError(f"{argv[0]} is not installed") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise EngineScanError(f"{argv[0]} timed out after {timeout}s") from exc
+    except OSError as exc:
+        raise EngineScanError(f"could not run {argv[0]}: {exc}") from exc
+    return completed.returncode, (completed.stderr or "").strip()[-2000:], completed.stdout or ""
+
+
 def scan_with_engine(
     database: str | Path,
     network: str,
@@ -130,7 +244,22 @@ def scan_with_engine(
     with tempfile.TemporaryDirectory(prefix="lumos-engine-") as directory:
         output = Path(directory) / "report.xml"
         argv = build_argv(engine, binary, cleaned_target, chosen.ports, output, chosen.rate)
-        code, log = run_engine(argv, timeout=chosen.timeout)
+        json_output = ""
+        if engine.name in JSON_LINE_ENGINES or engine.name in GREPPABLE_ENGINES:
+            code, log, json_output = run_engine_capture(argv, timeout=chosen.timeout)
+        else:
+            code, log = run_engine(argv, timeout=chosen.timeout)
+        if engine.name in JSON_LINE_ENGINES or engine.name in GREPPABLE_ENGINES:
+            parser = naabu_records if engine.name in JSON_LINE_ENGINES else rustscan_records
+            records = parser(json_output)
+            if not records:
+                raise EngineScanError(
+                    f"{engine.name} found no open ports (exit {code})"
+                    + (f": {log}" if log else "")
+                )
+            output.write_text(
+                records_to_xml(records, engine.name, argv), encoding="utf-8"
+            )
         if not output.is_file() or output.stat().st_size == 0:
             raise EngineScanError(
                 f"{engine.name} produced no report (exit {code}){': ' + log if log else ''}"
