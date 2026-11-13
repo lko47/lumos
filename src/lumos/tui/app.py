@@ -560,18 +560,23 @@ def _workspace_or_file(database: Path, members: list[str]) -> MapSnapshot:
     return workspace.load_workspace_snapshot([str(database), *members])
 
 
-def _pick_workspace_member(
-    window: Any, styles: dict[str, int], unicode_ok: bool, database: Path, members: list[str]
-) -> str | None:
-    """Choose another engagement file to add; the file itself is only read."""
-    candidates = []
+def _workspace_candidates(database: Path, members: list[str]) -> list[str]:
+    """Other engagement files that exist and are not already in the workspace."""
+    candidates: list[str] = []
     for entry in actions.recent_engagements():
         path = str(entry.get("path") or "")
         if not path or path == str(database) or path in members:
             continue
+        if not entry.get("exists", True):
+            continue
         candidates.append(path)
-    if not candidates:
-        return None
+    return candidates
+
+
+def _choose_member(
+    window: Any, styles: dict[str, int], unicode_ok: bool, candidates: list[str]
+) -> str | None:
+    """Pick one candidate path; ``None`` when the operator backs out."""
     labels = [f"{Path(path).stem}   {path}" for path in candidates]
     index = forms.choose(
         window, styles, unicode_ok, "add engagement to workspace", labels,
@@ -669,12 +674,19 @@ def _run_event_loop(ctx: UiContext, watcher: MapSnapshotWatcher) -> Path | None:
             state.notify("enumeration settings")
             dirty = True
         elif key == ord("w"):
-            picked = _pick_workspace_member(window, styles, unicode_ok, database, members)
-            if picked is not None:
-                members.append(picked)
-                snapshot = _workspace_or_file(database, members)
-                _clamp_selection(state, snapshot)
-                state.notify(f"workspace: {len(members) + 1} engagements")
+            candidates = _workspace_candidates(database, members)
+            if not candidates:
+                state.notify("no other engagement to add")
+            else:
+                picked = _choose_member(window, styles, unicode_ok, candidates)
+                if picked is not None:
+                    members.append(picked)
+                    snapshot = _workspace_or_file(database, members)
+                    _clamp_selection(state, snapshot)
+                    shared = workspace.shared_address_count(snapshot)
+                    state.notify(
+                        f"workspace: {len(members) + 1} engagements, {shared} shared"
+                    )
             dirty = True
         elif key == ord("a"):
             state.animation = not state.animation

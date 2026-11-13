@@ -113,6 +113,28 @@ class BridgeRenderingTests(unittest.TestCase):
         self.assertEqual(edge_class(bridge), "shared")
 
 
+class CandidateTests(unittest.TestCase):
+    def test_missing_and_current_files_are_not_offered(self) -> None:
+        from lumos.tui import app
+
+        entries = [
+            {"path": "a.sqlite", "exists": True},
+            {"path": "gone.sqlite", "exists": False},
+            {"path": "b.sqlite", "exists": True},
+        ]
+        with mock.patch.object(app.actions, "recent_engagements", return_value=entries):
+            found = app._workspace_candidates(Path("a.sqlite"), ["b.sqlite"])
+        self.assertEqual(found, [])
+
+    def test_other_existing_files_are_offered(self) -> None:
+        from lumos.tui import app
+
+        entries = [{"path": "a.sqlite", "exists": True}, {"path": "c.sqlite", "exists": True}]
+        with mock.patch.object(app.actions, "recent_engagements", return_value=entries):
+            found = app._workspace_candidates(Path("a.sqlite"), [])
+        self.assertEqual(found, ["c.sqlite"])
+
+
 class TuiWiringTests(unittest.TestCase):
     def test_single_file_uses_the_plain_loader(self) -> None:
         from lumos.tui import app
