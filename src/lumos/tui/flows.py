@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import curses
+import threading
+from dataclasses import dataclass
 import time
 from collections import deque
 from pathlib import Path
 from typing import Any, Callable
 
+from ..core import engine_scan, engines
 from ..services import actions
 from . import forms
 from . import mouse
@@ -324,6 +327,104 @@ def _interface_choices() -> tuple[str, ...]:
     return ("auto",) + tuple(name for name in names if name != "auto")
 
 
+ENGINE_POLL_SECONDS = 0.15
+
+
+def engine_choices() -> tuple[str, ...]:
+    """Engines the operator can actually use: installed and switched on.
+
+    nmap always leads because it is the only one that reports services; the
+    port-only tools are useful, but they are not a substitute for -sV.
+    """
+    enabled = engines.load_enabled()
+    found = engines.detect()
+    names = [engine.name for engine in engines.ENGINES
+             if found.get(engine.name) and engine.name in enabled]
+    if "nmap" in names:
+        names.remove("nmap")
+        names.insert(0, "nmap")
+    return tuple(names) or ("nmap",)
+
+
+@dataclass(frozen=True)
+class EngineRequest:
+    """What to run: which engine, where, and against which targets."""
+
+    engine: str
+    targets: tuple[str, ...]
+    network: str
+    operator: str
+
+
+def _engine_scan_flow(
+    window: Any,
+    styles: dict[str, int],
+    unicode_ok: bool,
+    database: Path,
+    request: EngineRequest,
+) -> actions.ActionResult:
+    """Run a port-only enumerator. These tools stream nothing, so this waits.
+
+    The worker is a daemon thread because a half-imported scan is still useful
+    evidence: closing the panel leaves the run going and the results land in the
+    database when it finishes.
+    """
+    outcome: list[tuple[bool, str]] = []
+
+    def work() -> None:
+        try:
+            total = 0
+            for target in request.targets:
+                _scan_id, hosts, _message = engine_scan.scan_with_engine(
+                    database, request.network, request.engine, target,
+                    engine_scan.EngineOptions(operator=request.operator),
+                )
+                total += hosts
+            outcome.append((
+                True,
+                f"{request.engine}: {total} host(s) from {len(request.targets)} target(s)",
+            ))
+        except engine_scan.EngineScanError as exc:
+            outcome.append((False, str(exc)))
+        except Exception as exc:  # a worker must never die silently
+            outcome.append((False, f"{request.engine} failed: {exc}"))
+
+    worker = threading.Thread(target=work, daemon=True)
+    worker.start()
+    started = time.monotonic()
+    window.timeout(int(ENGINE_POLL_SECONDS * 1000))
+    try:
+        while not outcome:
+            itop, ileft, ih, iw = _box(
+                window, styles, unicode_ok, title="scanning", width=64, height=7
+            )
+            elapsed = time.monotonic() - started
+            safe_addstr(
+                window, itop, ileft,
+                clip(f"enumerating with {request.engine}   {elapsed:.1f}s", iw), iw,
+                _attr(styles, "accent"), unicode_ok=unicode_ok,
+            )
+            safe_addstr(
+                window, itop + 2, ileft,
+                clip(f"{len(request.targets)} target(s); ports only, no service detection", iw), iw,
+                _attr(styles, "muted"), unicode_ok=unicode_ok,
+            )
+            safe_addstr(
+                window, itop + ih - 1, ileft,
+                "Esc returns to the map; the scan keeps running", iw,
+                _attr(styles, "muted"), unicode_ok=unicode_ok,
+            )
+            window.refresh()
+            if window.getch() == 27:
+                return actions.ActionResult(
+                    True, f"{request.engine} is still running in the background"
+                )
+    finally:
+        window.timeout(1000)
+    ok, message = outcome[0]
+    return actions.ActionResult(ok, message)
+
+
 def flow_scan(
     window: Any, styles: dict[str, int], unicode_ok: bool, database: Path
 ) -> actions.ActionResult | None:
@@ -343,8 +444,15 @@ def flow_scan(
             forms.Field("options", "options", hint="extra Nmap options"),
             forms.Field("interface", "interface", value="auto", kind="choice", choices=_interface_choices()),
             forms.Field("evidence", "evidence", value="1", kind="bool", hint="keep raw XML"),
+            forms.Field(
+                "engine", "engine", value=engine_choices()[0], kind="choice",
+                choices=engine_choices(), hint="port-only tools skip -sV",
+            ),
         ],
-        note="Lumos runs the installed Nmap directly; targets stay scope-checked.",
+        note=(
+            "nmap reports services; port-only engines are faster but skip -sV. "
+            "Targets stay scope-checked."
+        ),
         validate=lambda field_values: None
         if field_values["targets"].strip()
         else "at least one target is required",
@@ -383,6 +491,16 @@ def flow_scan(
         # The operator confirmed the same targets the phrase names, so the
         # audit row still records the phrase the CLI would have required.
         phrase = preview.payload["phrase"]
+    if values.get("engine", "nmap") != "nmap":
+        return _engine_scan_flow(
+            window, styles, unicode_ok, database,
+            EngineRequest(
+                engine=values["engine"],
+                targets=tuple(targets),
+                network=network,
+                operator=values.get("operator") or actions.default_operator(),
+            ),
+        )
     interface = "" if values["interface"] == "auto" else values["interface"]
     job = actions.ScanJob(
         database,
@@ -502,6 +620,10 @@ def flow_import(window: Any, styles: dict[str, int], unicode_ok: bool, database:
             forms.Field("xml", "xml file", value=str(Path.cwd() / "scan.xml")),
             forms.Field("network", "network", value="default"),
             forms.Field("evidence", "evidence", value="1", kind="bool", hint="keep raw XML"),
+            forms.Field(
+                "engine", "engine", value=engine_choices()[0], kind="choice",
+                choices=engine_choices(), hint="port-only tools skip -sV",
+            ),
         ],
     )
     if values is None:
