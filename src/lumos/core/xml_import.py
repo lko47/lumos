@@ -104,7 +104,11 @@ def import_nmap_xml(
     except ValueError:
         args = []
     if not args:
-        args = ["nmap-xml-import"]
+        # A tool that omits <nmaprun args=""> still names itself in the root
+        # attribute; masscan does. Record that rather than pretending the file
+        # came from nmap - provenance is what the audit log is for.
+        scanner = sanitize_text(root.get("scanner", ""), max_chars=64).strip().lower()
+        args = [f"{scanner}-xml-import"] if scanner and scanner != "nmap" else ["nmap-xml-import"]
 
     engagement_id, network_id = get_network(database_path, network_name)
     scope_rules = read_scope_rules(database_path, engagement_id)
