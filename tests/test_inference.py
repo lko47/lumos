@@ -553,14 +553,18 @@ class CollapseTests(unittest.TestCase):
         self.assertEqual(len(second), 10)
         self.assertNotEqual({row[2] for row in first}, {row[2] for row in second})
 
-    def test_small_hub_keeps_its_members_visible(self) -> None:
+    def test_a_hub_collapses_and_expands_explicitly(self) -> None:
+        """Every hub folds; expansion is a deliberate act, one hub at a time."""
         scan = Scenario(Path(self.tmp.name), (eth0(),), BASE_ROUTES)
         for index in range(5):
             scan.add_host(f"198.51.100.{index + 2}", reason="syn-ack")
         rebuild_inferred(scan.db)
-        snapshot = load_map_snapshot(scan.db)
-        self.assertEqual(len([n for n in snapshot.nodes if n.kind == "device"]), 5)
-        self.assertEqual(snapshot.not_shown, 0)
+        collapsed = load_map_snapshot(scan.db)
+        self.assertEqual([n for n in collapsed.nodes if n.kind == "device"], [])
+        hub = next(n for n in collapsed.nodes if n.kind == "zone" and n.member_count == 5)
+        expanded = load_map_snapshot(scan.db, expanded_zone=hub.zone_id)
+        self.assertEqual(len([n for n in expanded.nodes if n.kind == "device"]), 5)
+        self.assertEqual(expanded.not_shown, 0)
 
 
 if __name__ == "__main__":

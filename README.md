@@ -21,9 +21,34 @@ The interface is mouse-first as well as keyboard-first, and it moves: three slow
 
 Colour is semantic rather than hard-coded: themes `aurora`, `ember`, and `matrix` degrade to 16-colour palettes, and `NO_COLOR` selects a monochrome theme that keeps hierarchy through weight and reverse video only. `LUMOS_THEME` selects the starting theme. While open, the TUI detects committed database changes from concurrent scans and refreshes the map/status; scan batches become visible after their SQLite commit. The standalone `lumos interfaces` command reads local interface and route information from the installed Nmap's `--iflist` option and provides text or JSON output; it does not scan targets. `lumos interfaces --save` records those interfaces on the engagement's vantage point. The TUI launches scans from the `S` form (preset, targets, network, interface, evidence) after a review step that shows the exact argv and the scope verdict; progress streams in a panel from Nmap's `taskprogress` element and `Esc` twice cancels, keeping the hosts already written. Creating a database (`N`), editing scope (`P`), importing XML (`I`), writing reports (`R`), database checks/upgrade/rebuild/merge/interfaces (`T`), and an event log (`!`) are all reachable from the map, and each is also a command in the `:` palette. The CLI and the interface call the same functions in `services/actions.py`, so both front ends behave identically. The **scan** command displays the final Nmap command before execution. User-specified Nmap `-oN` and `-oG` output files are retained alongside Lumos's XML stream. An `-oX` or `-oA` manual option conflicts with XML-on-stdout and is rejected with an explanation.
 
-The TUI remains a prototype: it watches committed snapshots and streams `<taskprogress>` updates, but it does not show Nmap stderr line by line, save node positions, edit topology, or provide review and notes panels. Mouse, keyboard and drag/zoom panning are all implemented. Idle CPU measured 0.02 s over a 5 s idle window (0.4% of one core) in a 110x32 PTY on Python 3.14.9; resize, colour, SSH, and tmux coverage and the Python 3.10 run are still outstanding. Scan profiles/queue, comparisons, a notes editor, manual topology editing, HTML/CSV/JSON exports, plugins, scheduling, and a config file beyond `LUMOS_DB` are not implemented. Driving naabu or rustscan instead of Nmap is planned, not built: when it lands it will use the same scope guard, audit trail and database, and it will need a schema change to record which engine produced an observation (proposal first, never a silent migration). Ping-only (`-sn`) discovery is also not available: the runner accepts `-sS`, `-sT`, `-sU` and `-sV` only, so the interface's presets are connect, service, UDP and custom.
+The TUI remains a prototype: it watches committed snapshots and streams `<taskprogress>` updates, but it does not show Nmap stderr line by line, save node positions, edit topology, or provide review and notes panels. Mouse, keyboard and drag/zoom panning are all implemented. Idle CPU measured 0.02 s over a 5 s idle window (0.4% of one core) in a 110x32 PTY on Python 3.14.9; resize, colour, SSH, and tmux coverage and the Python 3.10 run are still outstanding. Scan profiles/queue, comparisons, a notes editor, manual topology editing, HTML/CSV/JSON exports, plugins, scheduling, and a config file beyond `LUMOS_DB` are not implemented. Four engines can enumerate: **Nmap** (services, OS, traceroute), **masscan** (XML import or a direct run), **naabu** (JSON lines) and **rustscan** (greppable text). Each runs through the same scope guard, audit trail and database; naabu and rustscan output is normalised into Nmap-shaped XML rather than teaching the schema three formats, so there is one evidence path, and `<nmaprun scanner=...>` records which tool produced the rows. `,` opens the enumeration settings page, a checkbox per engine with its resolved path or `not installed`; a disabled engine is refused before its binary runs, and the scan dialog only offers engines that are both installed and switched on. masscan needs raw-socket privileges, and neither masscan, naabu nor rustscan reports services or OS details. Ping-only (`-sn`) discovery is also not available: the runner accepts `-sS`, `-sT`, `-sU` and `-sV` only, so the interface's presets are connect, service, UDP and custom.
 
 Nmap progress flags are enabled for builds that support `--stats-every` (7.60 or newer, or when the flag appears in the help text) and are read from the `<taskprogress>` elements Nmap writes into the XML stream; on older builds the panel shows elapsed time and a plain working indicator instead. Traceroute topology must not be inferred from the current default connect scan; Nmap documents that traceroute is incompatible with `-sT`.
+
+### Keys worth knowing
+
+| Key | Action |
+| --- | --- |
+| `m` `v` `s` / `Tab` | map, hosts, scans |
+| click / `Enter` | select a node, edge, row or field |
+| `o` / `O` | toggle the selected hub / collapse every hub |
+| `[ set start ]` `[ set end ]` | click the sidebar buttons to mark a path |
+| `a` | motion on/off (dots, ripples, solid links) |
+| `+` `-` `0` | zoom in, zoom out, recentre |
+| arrows, `HJKL`, drag, wheel | pan, and zoom at the pointer |
+| `S` | scan form (preset, engine, targets, network) |
+| `w` | add another engagement to the view |
+| `,` | enumeration settings (engine checkboxes) |
+| `N` `P` `I` `R` `T` `!` | new engagement, scope, import XML, report, database tools, event log |
+| `?` `:` `/` | help, command palette, search |
+
+### Engagements, hubs and paths
+
+Several engagement files can be opened in one view (`w`): each file keeps its own cluster, node ids are prefixed per member, roots are labelled `[engagement] host`, and any host whose address appears in more than one file is joined to its twin by a `═` bridge in the `shared` evidence class. Files are opened `mode=ro` and are never rewritten, so the imported engagement stays exactly as it was; the caps are eight members and 128 bridges.
+
+Hubs are **collapsed by default**, so the map opens as a view of hops rather than a wall of hosts. The SELECTED panel carries `[ expand members ]` / `[ collapse members ]` for the chosen hub (`o` toggles the selected hub, `O` collapses every hub), which is also how a NAT'd inner network folds into the single straight link between its parent and the hub.
+
+`[ set start ]` and `[ set end ]` mark two nodes and highlight the shortest path between them: path nodes carry a `▶` marker, the links on the path take the path style, and the hop count appears in the panel and the status line. The path is a breadth-first search over the edges the current view actually draws, so collapsing a hub really does change the route, and an unreachable pair reports that instead of drawing a line.
 
 ## Quick start
 

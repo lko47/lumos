@@ -44,7 +44,11 @@ class MapSnapshotTests(unittest.TestCase):
         add_scope_rule(self.db, "lab", "192.0.2.0/24", included=True, author="test")
         with patch.dict(os.environ, {"NMAP_FAKE_FIXTURE": str(FIXTURE)}):
             scan_database(self.db, "lab", ["192.0.2.10"], executable=str(FAKE), operator="test")
-        snapshot = load_map_snapshot(self.db)
+        collapsed = load_map_snapshot(self.db)
+        # Hubs are collapsed by default; the device detail lives one expand away.
+        self.assertTrue(any(node.kind == "zone" for node in collapsed.nodes))
+        hub = next((n.zone_id for n in collapsed.nodes if n.kind == "zone" and n.member_count), "")
+        snapshot = load_map_snapshot(self.db, expanded_zone=hub)
         node_ids = {node.id for node in snapshot.nodes}
         self.assertEqual(snapshot.active_scans, 0)
         self.assertGreaterEqual(sum(node.kind == "root" for node in snapshot.nodes), 1)

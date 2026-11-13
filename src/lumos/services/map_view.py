@@ -17,8 +17,6 @@ from ..core.text import sanitize_text
 # A hub with more members than this is drawn as one node with a count; asking
 # for a host inside it expands it (that is the next feature), and the bounded
 # query never materialises those member nodes at all.
-_COLLAPSE_MEMBERS = 50
-
 
 
 @dataclass(frozen=True)
@@ -215,17 +213,16 @@ def load_map_snapshot(
         if engagement is None:
             raise DatabaseError("engagement database has no engagement row")
         engagement_id, engagement_name = engagement
-        # Hubs above the collapse threshold are drawn as one node each, and
-        # their member nodes are never selected. Grouping the hidden set once
-        # is far cheaper than a correlated NOT IN over every device row.
+        # Every hub is collapsed unless it is the one being expanded: a zone is
+        # a drawing convention, so its members are hidden here rather than in
+        # the database, and collapsing one leaves the single link to the hub -
+        # which is the hop view. Grouping the hidden set once is far cheaper
+        # than a correlated NOT IN over every device row.
         rows = conn.execute(
-            """WITH big_zones AS (
-                   SELECT zone_id FROM zone_memberships WHERE zone_id <> ?
-                   GROUP BY zone_id HAVING COUNT(*) > ?
-               ), hidden AS (
+            """WITH hidden AS (
                    SELECT zm.topology_node_id AS node_id, 1 AS hidden
                    FROM zone_memberships zm
-                   JOIN big_zones bz ON bz.zone_id = zm.zone_id
+                   WHERE zm.zone_id <> ?
                    GROUP BY zm.topology_node_id
                ), chosen AS (
                    SELECT tn.id, tn.engagement_id, tn.kind, tn.label, tn.entity_id
@@ -294,7 +291,7 @@ def load_map_snapshot(
                LEFT JOIN addresses ha ON tn.kind IN ('hop', 'unknown_hop') AND ha.id = tn.entity_id
                ORDER BY CASE tn.kind WHEN 'root' THEN 0 WHEN 'hop' THEN 1 WHEN 'unknown_hop' THEN 2 ELSE 3 END,
                         tn.id""",
-            (expanded_zone, _COLLAPSE_MEMBERS, engagement_id, max_nodes),
+            (expanded_zone, engagement_id, max_nodes),
         ).fetchall()
 
         # Only links whose *both* ends are visible belong on the map. A temp

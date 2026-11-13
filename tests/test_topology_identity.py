@@ -129,7 +129,9 @@ class TopologyIdentityTests(unittest.TestCase):
         self.assertTrue(all(row[5] for row in rows))
         self.assertAlmostEqual(rows[0][2], 0.2)
         self.assertAlmostEqual(rows[1][2], 0.4)
-        snapshot = load_map_snapshot(self.db)
+        collapsed = load_map_snapshot(self.db)
+        hub = next((n.zone_id for n in collapsed.nodes if n.kind == "zone" and n.member_count), "")
+        snapshot = load_map_snapshot(self.db, expanded_zone=hub)
         self.assertEqual(len(snapshot.edges), 2)
         self.assertEqual(snapshot.edges[0].edge_type, "inferred")
 
@@ -146,7 +148,8 @@ class TopologyIdentityTests(unittest.TestCase):
         self.assertEqual(len(snapshot.nodes), 2)
         self.assertEqual(snapshot.not_shown, total - 2)
         self.assertIn(f"Not shown: {total - 2}", render_plain_snapshot(snapshot))
-        full = load_map_snapshot(self.db)
+        hub = next((n.zone_id for n in snapshot.nodes if n.kind == "zone" and n.member_count), "")
+        full = load_map_snapshot(self.db, expanded_zone=hub)
         self.assertEqual(full.not_shown, 0)
 
 
