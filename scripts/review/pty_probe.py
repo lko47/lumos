@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import fcntl
 import os
+from pathlib import Path
 import pty
 import re
 import select
@@ -16,7 +17,7 @@ import time
 DB = sys.argv[1]
 MODE = sys.argv[2] if len(sys.argv) > 2 else "sigterm"
 ENV = dict(os.environ)
-ENV["PYTHONPATH"] = "/home/user/.hermes/cache/scratch/lumos-review/src"
+ENV["PYTHONPATH"] = str(Path(__file__).resolve().parents[2] / "src")
 ENV.pop("LUMOS_DB", None)
 ENV.setdefault("TERM", "xterm-256color")
 ENV["TERM"] = ENV.get("TERM") or "xterm-256color"

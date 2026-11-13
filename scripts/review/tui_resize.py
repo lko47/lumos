@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import fcntl
 import os
+from pathlib import Path
 import pty
 import select
 import struct
@@ -14,7 +15,7 @@ import pyte
 
 DB = sys.argv[1]
 ENV = dict(os.environ)
-ENV["PYTHONPATH"] = "/home/user/.hermes/cache/scratch/lumos-review/src"
+ENV["PYTHONPATH"] = str(Path(__file__).resolve().parents[2] / "src")
 ENV["TERM"] = "xterm-256color"
 
 

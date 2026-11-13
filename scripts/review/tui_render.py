@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import pty
 import re
 import select
@@ -16,7 +17,7 @@ import pyte
 DB = sys.argv[1]
 ROWS, COLS = 32, 110
 ENV = dict(os.environ)
-ENV["PYTHONPATH"] = "/home/user/.hermes/cache/scratch/lumos-review/src"
+ENV["PYTHONPATH"] = str(Path(__file__).resolve().parents[2] / "src")
 ENV["TERM"] = "xterm-256color"
 ENV.pop("NO_COLOR", None)
 
