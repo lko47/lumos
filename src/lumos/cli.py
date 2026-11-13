@@ -32,7 +32,7 @@ from .core.vantage_store import save_interfaces
 from .core.scope import read_target_file
 from .core.scope_store import add_scope_rule
 from .core.xml_import import import_nmap_xml
-from .services import actions, compare, notes, review, tags
+from .services import actions, compare, notes, queue, review, tags
 from .core import state as local_state
 
 AUTHORIZED_USE_NOTICE = "Authorized use only: scan systems and networks you own or are explicitly permitted to assess. Confirm scope and permissions before proceeding."
@@ -136,6 +136,20 @@ def _parser() -> argparse.ArgumentParser:
     compare_cmd.add_argument("--list", action="store_true", dest="list_scans",
                              help="list completed scans")
 
+    queue_cmd = commands.add_parser("queue", help="queue scans and run them in order")
+    queue_cmd.add_argument("database", type=Path)
+    queue_cmd.add_argument("targets", nargs="*", help="targets for --add")
+    queue_cmd.add_argument("--network", default="", help="network for --add")
+    queue_cmd.add_argument("--nmap-options", dest="queue_options", default="")
+    queue_cmd.add_argument("--engine", default="nmap")
+    queue_cmd.add_argument("--add", action="store_true", dest="add_job")
+    queue_cmd.add_argument("--list", action="store_true", dest="list_queue")
+    queue_cmd.add_argument("--remove", default="")
+    queue_cmd.add_argument("--clear", action="store_true", dest="clear_queue")
+    queue_cmd.add_argument("--run", action="store_true", dest="run_queue")
+    queue_cmd.add_argument("--yes", action="store_true")
+    queue_cmd.add_argument("--operator", default=None)
+
     review_cmd = commands.add_parser("review", help="list review items and record decisions")
     review_cmd.add_argument("database", type=Path)
     review_cmd.add_argument("--list", action="store_true", dest="list_review")
@@ -233,7 +247,7 @@ def _open_default(path: Path | None) -> int:
 
 
 SUBCOMMANDS = frozenset(
-    {"db", "scope", "interfaces", "scan", "import", "tui", "report", "note", "compare", "tag", "review"}
+    {"db", "scope", "interfaces", "scan", "import", "tui", "report", "note", "compare", "tag", "review", "queue"}
 )
 
 
@@ -311,6 +325,109 @@ def _run_scan(args: Any) -> int:
     if result.stderr:
         print(result.stderr, file=sys.stderr)
     return 0 if status == "completed" else 1
+
+
+def _run_queue_command(args: Any) -> int:
+    """Add, list, remove, clear or run queued scans."""
+    try:
+        if args.add_job:
+            if not args.network:
+                print("lumos: --add needs --network", file=sys.stderr)
+                return 2
+            job = queue.add_job(
+                args.database, network=args.network, targets=args.targets,
+                nmap_options=args.queue_options, engine=args.engine,
+            )
+            print(f"queued {job.id[:8]}: {job.summary}")
+            return 0
+        if args.remove:
+            if not queue.remove_job(args.database, args.remove):
+                print("lumos: no queued job matches that id", file=sys.stderr)
+                return 2
+            print(f"removed {args.remove}")
+            return 0
+        if args.clear_queue:
+            print(f"cleared {queue.clear(args.database)} job(s)")
+            return 0
+        if args.run_queue:
+            return _run_queued_scans(args)
+        jobs = queue.load_jobs(args.database)
+        if not jobs:
+            print("the queue is empty")
+        for position, job in enumerate(jobs, start=1):
+            print(f"{position}. {job.id[:8]}  {job.summary}")
+        return 0
+    except queue.QueueError as exc:
+        print(f"lumos: {exc}", file=sys.stderr)
+        return 2
+
+
+def _run_queued_scans(args: Any) -> int:
+    """Run each job in order, stopping at the first failure.
+
+    A failure stops the queue rather than skipping ahead: the next job may have
+    been queued *because* of what the failed one would have found.
+    """
+    try:
+        jobs = queue.load_jobs(args.database)
+    except queue.QueueError as exc:
+        print(f"lumos: {exc}", file=sys.stderr)
+        return 2
+    if not jobs:
+        print("the queue is empty")
+        return 0
+    print(AUTHORIZED_USE_NOTICE, file=sys.stderr)
+    for position, job in enumerate(jobs, start=1):
+        print(f"[{position}/{len(jobs)}] {job.summary}", file=sys.stderr)
+        if job.engine != "nmap":
+            if not _run_engine_job(args, job):
+                return 1
+            queue.remove_job(args.database, job.id)
+            continue
+        try:
+            outcome = scan_database(
+                args.database, job.network, job.targets,
+                nmap_options=job.nmap_options,
+                operator=args.operator,
+                on_command=lambda command: _show_command(
+                    command, label="Nmap command", yes=args.yes
+                ),
+                on_progress=_print_progress,
+            )
+        except Exception as exc:  # scope refusal, missing nmap, bad option text
+            print(f"lumos: queued job stopped the run: {exc}", file=sys.stderr)
+            return 2
+        result = outcome.result
+        if result.cancelled or result.exit_code != 0 or result.parse_error:
+            print(
+                f"lumos: scan {outcome.scan_id} did not complete;"
+                " the rest of the queue is kept",
+                file=sys.stderr,
+            )
+            return 1
+        queue.remove_job(args.database, job.id)
+        print(f"Scan {outcome.scan_id}: completed; {result.hosts_seen} host(s)")
+    print(f"{len(jobs)} job(s) run; the queue is empty")
+    return 0
+
+
+def _run_engine_job(args: Any, job: Any) -> bool:
+    """Run one queued non-Nmap job; True when it completed."""
+    total = 0
+    for target in job.targets:
+        try:
+            _scan_id, hosts, _message = engine_scan.scan_with_engine(
+                args.database, job.network, job.engine, target,
+                engine_scan.EngineOptions(
+                    ports=job.nmap_options, rate=1000, operator=args.operator
+                ),
+            )
+        except Exception as exc:
+            print(f"lumos: queued job stopped the run: {exc}", file=sys.stderr)
+            return False
+        total += hosts
+    print(f"{job.engine}: {total} host(s)")
+    return True
 
 
 def _run_review(args: Any) -> int:
@@ -474,7 +591,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         simple = {
             "compare": _run_compare, "note": _run_note, "tag": _run_tag,
-            "review": _run_review,
+            "review": _run_review, "queue": _run_queue_command,
         }
         if args.command in simple:
             return simple[args.command](args)

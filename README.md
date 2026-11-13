@@ -45,6 +45,7 @@ Nmap progress flags are enabled for builds that support `--stats-every` (7.60 or
 | `?` `:` `/` | help, command palette, search |
 | `lumos note DB "text" --node ID` | attach a note to a node (`--list` to read them back; the sidebar shows the newest) |
 | `lumos tag DB dmz --node ID` | tag a node (`--list`, `--remove`) |
+| `lumos queue DB --add --network N TARGET` | queue scans (`--list`, `--remove ID`, `--clear`, `--run`) |
 | `lumos review DB [--decide ID --set confirmed]` | review queue and decisions |
 | `lumos scan DB --target-file FILE` | scope-checked targets from a file (`-sn` preset for discovery) |
 | `lumos report json\|csv\|html DB OUT` | machine-readable exports (owner-only files) |
@@ -190,6 +191,14 @@ measured; `lumos report svg DATABASE OUT.svg` draws them dotted (three-on/two-of
 for likely, one-on/five-off for weak) while measured and local links stay solid,
 labels hubs with their CIDR and member count, and repeats the caveat in the
 image and its description.
+
+## Queueing scans
+
+`lumos queue` records scans to run later, in the order given, and `--run` executes them one at a time through the same scope-checked path as a typed scan.
+
+A queued job is an intention, not a measurement, so it lives in `<database>.queue.json` beside the database (owner-only, written through a temporary file) rather than in a table: no schema change, and a queue that never ran leaves no trace in the evidence. The file is treated as hostile on load - every field re-validated and sanitised, an unknown engine falls back to `nmap`, 32 jobs and 512 targets per job, and a file that cannot be understood is an error sentence rather than a silently empty queue.
+
+A failure stops the run and keeps the rest of the queue: the next job may have been queued *because* of what the failed one would have found.
 
 ## Development status and project hygiene
 
