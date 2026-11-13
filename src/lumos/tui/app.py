@@ -18,7 +18,7 @@ from ..core.decisions import DecisionError, record_decision
 from ..core.text import sanitize_text
 from ..services import actions
 from ..services.map_view import MapSnapshot, MapSnapshotWatcher, load_map_snapshot, render_plain_snapshot
-from ..services import workspace, path_view
+from ..services import notes, workspace, path_view
 from ..core import engines
 from . import theme
 from . import flows
@@ -309,6 +309,56 @@ def _zoom_with_wheel(
         )
         return
     state.viewport = state.viewport.zoom_at(ax, ay, iw, ih, direction)
+
+
+def _toggle_hub(state: ViewState, snapshot: MapSnapshot, collapse_all: bool) -> None:
+    """Expand or collapse the selected hub; ``collapse_all`` ignores the selection."""
+    node = (
+        snapshot.nodes[state.selected]
+        if not collapse_all and state.selected_kind == "node"
+        and 0 <= state.selected < len(snapshot.nodes)
+        else None
+    )
+    if node is None or node.kind != "zone":
+        state.expanded_zone = ""
+        state.notify("hubs collapsed")
+    elif state.expanded_zone == node.zone_id:
+        state.expanded_zone = ""
+        state.notify(f"collapsed {node.label}")
+    else:
+        state.expanded_zone = node.zone_id
+        state.notify(f"expanded {node.label}; o again collapses")
+
+
+def _note_on_selection(
+    window: Any,
+    styles: dict[str, int],
+    unicode_ok: bool,
+    database: Path,
+    state: ViewState,
+    snapshot: MapSnapshot,
+) -> bool:
+    """Prompt for a note on the selected node; True when the map must reload."""
+    if state.selected_kind != "node" or not (0 <= state.selected < len(snapshot.nodes)):
+        state.notify("select a node first")
+        return False
+    node = snapshot.nodes[state.selected]
+    body = forms.text_prompt(
+        window, styles, unicode_ok, f"note on {node.label}",
+        forms.PromptOptions(note="Stored with this engagement; shown in the sidebar."),
+    )
+    if not body:
+        return False
+    try:
+        notes.add_note(
+            database, target_kind="topology_node", target_id=node.id,
+            body=body, author=actions.default_operator(),
+        )
+    except notes.NoteError as exc:
+        state.notify(str(exc))
+        return False
+    state.notify("note saved")
+    return True
 
 
 def _refresh_path(state: ViewState, snapshot: MapSnapshot) -> None:
@@ -809,18 +859,13 @@ def _run_event_loop(ctx: UiContext, watcher: MapSnapshotWatcher) -> Path | None:
             theme_name = _cycle_theme(theme_name, capability)
             styles = theme.init_styles(theme_name, capability)
             state.notify(f"theme {theme_name} — {theme.THEME_DESCRIPTIONS.get(theme_name, '')}")
+        elif key == ord("b"):
+            if _note_on_selection(window, styles, unicode_ok, database, state, snapshot):
+                watcher.reload_now()
+                _refresh_path(state, snapshot)
+            dirty = True
         elif key in (ord("o"), ord("O")):
-            rows = snapshot.nodes
-            node = rows[state.selected] if state.selected_kind == "node" and 0 <= state.selected < len(rows) else None
-            if key == ord("O") or node is None or node.kind != "zone":
-                state.expanded_zone = ""
-                state.notify("hubs collapsed")
-            elif state.expanded_zone == node.zone_id:
-                state.expanded_zone = ""
-                state.notify(f"collapsed {node.label}")
-            else:
-                state.expanded_zone = node.zone_id
-                state.notify(f"expanded {node.label}; o again collapses")
+            _toggle_hub(state, snapshot, key == ord("O"))
             watcher.expanded_zone = state.expanded_zone
             watcher.reload_now()
         elif key == ord("i"):

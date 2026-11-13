@@ -22,7 +22,7 @@ flowchart LR
     P4 -->|"19 imports"| P2
     P4 -->|"2 imports"| P3
     P5 -->|"14 imports"| P2
-    P5 -->|"12 imports"| P4
+    P5 -->|"13 imports"| P4
 ```
 
 | importing module | imported module |
@@ -88,6 +88,7 @@ flowchart LR
 | `lumos.tui.app` | `lumos.services` |
 | `lumos.tui.app` | `lumos.services.actions` |
 | `lumos.tui.app` | `lumos.services.map_view` |
+| `lumos.tui.app` | `lumos.services.notes` |
 | `lumos.tui.app` | `lumos.services.path_view` |
 | `lumos.tui.app` | `lumos.services.workspace` |
 | `lumos.tui.flows` | `lumos.core` |

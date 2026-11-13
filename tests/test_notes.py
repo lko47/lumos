@@ -105,3 +105,56 @@ class NoteFoldTests(unittest.TestCase):
         ]
         folded, _edges = collapse_duplicates(nodes, ())
         self.assertEqual(folded[0].note, "same")
+
+
+class TuiNoteTests(unittest.TestCase):
+    """`b` in the interface: prompt, store, ask for a redraw - or explain why not."""
+
+    def setUp(self) -> None:
+        from lumos.services.map_view import MapNode, MapSnapshot
+        from lumos.tui import render
+
+        self.state = render.ViewState()
+        self.snapshot = MapSnapshot(
+            engagement_id="x", engagement_name="x", scans=1, active_scans=0, review_items=0,
+            nodes=(MapNode(
+                id="node-1", kind="device", label="192.0.2.10", addresses=("192.0.2.10",),
+                os_name="", open_ports=0, review_count=0, distance=0,
+            ),),
+            edges=(),
+        )
+
+    def test_a_typed_note_is_stored_against_the_selected_node(self) -> None:
+        from unittest import mock
+
+        from lumos.tui import app
+
+        self.state.selected_kind = "node"
+        self.state.selected = 0
+        with mock.patch.object(app.forms, "text_prompt", return_value="this is a jump box"), \
+                mock.patch.object(app.notes, "add_note") as add_note:
+            self.assertTrue(app._note_on_selection(
+                None, {}, True, Path("db.sqlite"), self.state, self.snapshot))
+        add_note.assert_called_once()
+        self.assertEqual(add_note.call_args.kwargs["target_id"], "node-1")
+        self.assertEqual(add_note.call_args.kwargs["body"], "this is a jump box")
+
+    def test_cancelling_changes_nothing(self) -> None:
+        from unittest import mock
+
+        from lumos.tui import app
+
+        self.state.selected_kind = "node"
+        self.state.selected = 0
+        with mock.patch.object(app.forms, "text_prompt", return_value=None), \
+                mock.patch.object(app.notes, "add_note") as add_note:
+            self.assertFalse(app._note_on_selection(
+                None, {}, True, Path("db.sqlite"), self.state, self.snapshot))
+        add_note.assert_not_called()
+
+    def test_without_a_selection_it_says_so(self) -> None:
+        from lumos.tui import app
+
+        self.state.selected_kind = "edge"
+        self.assertFalse(app._note_on_selection(
+            None, {}, True, Path("db.sqlite"), self.state, self.snapshot))

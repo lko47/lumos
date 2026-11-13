@@ -12,6 +12,7 @@ from . import animation
 from . import mouse
 from .widgets import (
     clear_overlays,
+    clip,
     clear_region,
     draw_box,
     remember_overlay,
@@ -355,6 +356,86 @@ def confirm(
                 return True
             if key in (ord("n"), ord("N"), 27):
                 return False
+    finally:
+        window.timeout(1000)
+
+
+@dataclass(frozen=True)
+class PromptOptions:
+    """Everything a text prompt needs beyond its title."""
+
+    initial: str = ""
+    note: str = ""
+    max_chars: int = 4000
+    row_width: int | None = None
+
+
+def text_prompt(
+    window: Any,
+    styles: dict[str, int],
+    unicode_ok: bool,
+    title: str,
+    options: PromptOptions | None = None,
+) -> str | None:
+    """Ask for a line of text; ``None`` when the operator cancels.
+
+    Backspace edits, Enter accepts, Esc cancels, and the caret is always at the
+    end - a single-line field is enough for a note and keeps the widget small
+    enough to reason about. The caller sanitises and stores what comes back.
+    """
+    chosen = options or PromptOptions()
+    initial, note = chosen.initial, chosen.note
+    max_chars, row_width = chosen.max_chars, chosen.row_width
+    buffer = list(initial[:max_chars])
+    window.timeout(-1)
+    try:
+        while True:
+            if _too_small(window, styles, unicode_ok):
+                return None
+            height, width = window.getmaxyx()
+            box_width = min(row_width or 72, max(24, width - 2))
+            inner = max(8, box_width - 4)
+            note_lines = _wrap(note, inner) if note else []
+            box_height = min(7 + len(note_lines), max(7, height - 2))
+            top = max(0, (height - box_height) // 2)
+            left = max(0, (width - box_width) // 2)
+            clear_overlays(window)
+            top, left, box_height, box_width = _clamp(height, width, top, left, box_height, box_width)
+            remember_overlay(window, (top, left, box_height, box_width))
+            itop, ileft, ih, iw = draw_box(
+                window, top, left, box_height, box_width,
+                title=f" {title} ", border_attr=_attr(styles, "border_focus"),
+                title_attr=_attr(styles, "brand"), unicode_ok=unicode_ok,
+            )
+            text = "".join(buffer)
+            lines = _wrap(text + "▏", max(8, iw - 1), max_lines=max(1, ih - 4))
+            for offset, line in enumerate(lines):
+                safe_addstr(window, itop + offset, ileft, clip(line, iw), iw,
+                            _attr(styles, "text", 0), unicode_ok=unicode_ok)
+            hint_row = itop + ih - 2
+            hint = f"{len(text)}/{max_chars}   Enter saves - Esc cancels"
+            safe_addstr(window, hint_row, ileft, clip(hint, iw), iw,
+                        _attr(styles, "muted"), unicode_ok=unicode_ok)
+            if note_lines:
+                for offset, line in enumerate(note_lines[: max(0, ih - 4 - len(lines))]):
+                    safe_addstr(window, hint_row - 1 - offset, ileft, clip(line, iw), iw,
+                                _attr(styles, "muted"), unicode_ok=unicode_ok)
+            window.refresh()
+            key = window.getch()
+            if key in (10, 13, curses.KEY_ENTER):
+                value = "".join(buffer).strip()
+                return value or None
+            if key == 27:
+                return None
+            if key in (curses.KEY_BACKSPACE, 8, 127):
+                if buffer:
+                    buffer.pop()
+                continue
+            if key == curses.KEY_RESIZE:
+                window.clearok(True)
+                continue
+            if 32 <= key <= 126 and len(buffer) < max_chars:
+                buffer.append(chr(key))
     finally:
         window.timeout(1000)
 
