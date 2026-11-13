@@ -19,7 +19,7 @@ IDLE_SECONDS = 1.0
 
 # Packet dots along a measured link ------------------------------------------
 FLOW_PERIOD_SECONDS = 3.5
-FLOW_DOTS_PER_EDGE = 1
+FLOW_DOTS_PER_EDGE = 3
 FLOW_GLYPH = "·"
 FLOW_GLYPH_ASCII = "*"
 PHASE_BUCKETS = 997
@@ -85,6 +85,35 @@ def flow_position(
     x = round(start[0] + (end[0] - start[0]) * fraction)
     y = round(start[1] + (end[1] - start[1]) * fraction)
     return (x, y)
+
+
+def flow_positions(
+    start: tuple[int, int],
+    end: tuple[int, int],
+    phase: float,
+    now: float,
+    count: int = FLOW_DOTS_PER_EDGE,
+) -> tuple[tuple[int, int], ...]:
+    """``count`` evenly spaced dots on one link, so the path stays readable.
+
+    A single dot leaves the link looking like a stray character; three spread
+    the eye along the whole segment while still reading as one direction.
+    """
+    if count <= 0:
+        return ()
+    fraction = _progress(now, phase)
+    span = abs(end[0] - start[0]) + abs(end[1] - start[1])
+    wanted = max(1, min(count, span))
+    points: list[tuple[int, int]] = []
+    for index in range(wanted):
+        offset = (fraction + index / wanted) % 1.0
+        x = round(start[0] + (end[0] - start[0]) * offset)
+        y = round(start[1] + (end[1] - start[1]) * offset)
+        # Two dots must never share a cell: on a three-cell link they would
+        # read as one dot plus an artefact.
+        if (x, y) not in points:
+            points.append((x, y))
+    return tuple(points)
 
 
 def flow_visible(

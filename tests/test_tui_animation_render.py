@@ -97,6 +97,27 @@ class FlowDotTests(unittest.TestCase):
         glyphs = draw(snapshot(edge_type="manual"), state).cells()
         self.assertNotIn(animation.FLOW_GLYPH, glyphs.values())
 
+    def test_three_dots_per_link(self) -> None:
+        state = render.ViewState()
+        state.animation = True
+        state.now = 0.7
+        glyphs = draw(snapshot(), state).cells()
+        dots = [cell for cell, char in glyphs.items() if char == animation.FLOW_GLYPH]
+        # Three dots on a long link; a short link holds as many as fit.
+        self.assertGreaterEqual(len(dots), 2)
+        self.assertLessEqual(len(dots), animation.FLOW_DOTS_PER_EDGE)
+
+    def test_links_are_solid_while_animating(self) -> None:
+        from lumos.tui import map_render
+
+        edge = snapshot(edge_type="inferred").edges[0]
+        animating = render.ViewState()
+        animating.animation = True
+        still = render.ViewState()
+        still.animation = False
+        self.assertEqual(map_render._edge_style(edge, animating), "observed")
+        self.assertEqual(map_render._edge_style(edge, still), map_render.edge_class(edge))
+
     def test_animation_toggle_stills_the_map(self) -> None:
         state = render.ViewState()
         state.animation = False

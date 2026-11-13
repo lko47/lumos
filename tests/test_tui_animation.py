@@ -31,6 +31,19 @@ class FlowTests(unittest.TestCase):
         again = anim.flow_position(start, end, 0.0, anim.FLOW_PERIOD_SECONDS)
         self.assertEqual(once, again)
 
+    def test_three_dots_share_one_link(self) -> None:
+        start, end = (0, 0), (12, 0)
+        points = anim.flow_positions(start, end, 0.0, 0.0)
+        self.assertEqual(len(points), anim.FLOW_DOTS_PER_EDGE)
+        self.assertEqual(len(set(points)), 3, "dots must not stack on one cell")
+        self.assertEqual({y for _x, y in points}, {0})
+
+    def test_three_dots_keep_travelling(self) -> None:
+        start, end = (0, 0), (12, 0)
+        first = anim.flow_positions(start, end, 0.0, 0.0)
+        later = anim.flow_positions(start, end, 0.0, 1.0)
+        self.assertNotEqual(first, later)
+
     def test_short_links_are_not_animated(self) -> None:
         self.assertFalse(anim.flow_visible((4, 4), (4, 5), 0.0))
         self.assertTrue(anim.flow_visible((4, 4), (8, 4), 0.0))

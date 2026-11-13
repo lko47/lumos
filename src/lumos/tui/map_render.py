@@ -205,7 +205,7 @@ def draw_map_panel(
             end = projected.get(edge.to_node_id)
             if start is None or end is None or not _segment_visible(start, end, iw, ih):
                 continue
-            style_name = edge_class(edge)
+            style_name = _edge_style(edge, state)
             canvas = layers.get(style_name)
             if canvas is None:
                 canvas = BrailleCanvas(iw, ih)
@@ -222,7 +222,7 @@ def draw_map_panel(
             end = projected.get(edge.to_node_id)
             if start is None or end is None or not _segment_visible(start, end, iw, ih):
                 continue
-            style_name = edge_class(edge)
+            style_name = _edge_style(edge, state)
             grid = grids.setdefault(style_name, [[" " for _ in range(iw)] for _ in range(ih)])
             _raster_line(grid, start, end, _EDGE_GLYPHS.get(style_name, ("-", "─"))[0])
         runs = _ascii_runs(grids, iw, ih)
@@ -308,6 +308,19 @@ _FLOW_BRIGHT_TYPES = frozenset({"traceroute", "observed"})
 _FLOW_DIM_TYPES = frozenset({"inferred", "local"})
 
 
+def _edge_style(edge: Any, state: Any) -> str:
+    """Layer/style for a link: solid while animating, evidence-coded otherwise.
+
+    With motion on, dotted evidence styles would read as a static trail of dots
+    along every path; the travelling dot's colour carries provenance instead.
+    Press ``a`` to get the dotted styles back.
+    """
+    animated = getattr(state, "animation", False)
+    if animated and _flow_style(edge) is not None:
+        return "observed"
+    return edge_class(edge)
+
+
 def _flow_style(edge: Any) -> str | None:
     """Style token for an animated link, or None when it must stay still.
 
@@ -343,10 +356,10 @@ def _draw_flow_dots(
         end = projected.get(edge.to_node_id)
         if start is None or end is None or not animation.flow_visible(start, end, state.now):
             continue
-        x, y = animation.flow_position(start, end, animation.phase_for(edge.id), state.now)
-        if 0 <= x < iw and 0 <= y < ih:
-            safe_addstr(window, itop + y, ileft + x, glyph, 1,
-                        _attr(styles, style), unicode_ok=unicode_ok)
+        for x, y in animation.flow_positions(start, end, animation.phase_for(edge.id), state.now):
+            if 0 <= x < iw and 0 <= y < ih:
+                safe_addstr(window, itop + y, ileft + x, glyph, 1,
+                            _attr(styles, style), unicode_ok=unicode_ok)
 
 
 def _draw_ripples(
