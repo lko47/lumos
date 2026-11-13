@@ -178,6 +178,18 @@ def _open_default(path: Path | None) -> int:
 SUBCOMMANDS = frozenset({"db", "scope", "interfaces", "scan", "import", "tui", "report"})
 
 
+def _print_progress(text: str) -> None:
+    """Print one Nmap progress chunk on its own line.
+
+    Nmap's ``<taskprogress>`` notes arrive without a trailing newline, so
+    printing them with ``end=""`` ran the final status line into the last
+    progress line.
+    """
+    line = text.rstrip()
+    if line:
+        print(line, file=sys.stderr, flush=True)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     tokens = list(sys.argv[1:] if argv is None else argv)
     if tokens and not tokens[0].startswith("-") and tokens[0] not in SUBCOMMANDS:
@@ -317,7 +329,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     label="Nmap command",
                     yes=args.yes,
                 ),
-                on_progress=lambda text: print(text, end="", file=sys.stderr, flush=True),
+                on_progress=_print_progress,
             )
             status = "cancelled" if outcome.result.cancelled else "completed" if outcome.result.exit_code == 0 and not outcome.result.parse_error else "failed"
             print(f"Scan {outcome.scan_id}: {status}; {outcome.result.hosts_seen} host(s); exit {outcome.result.exit_code}")
