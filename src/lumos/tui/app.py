@@ -350,6 +350,15 @@ def _track_discovery(state: ViewState, snapshot: MapSnapshot) -> None:
             del state.ripples[node_id]
 
 
+# Edge types that carry a travelling dot (bright for measured, dim otherwise).
+_FLOW_TYPES = frozenset({"traceroute", "observed", "inferred", "local"})
+
+
+def _has_flow(snapshot: MapSnapshot) -> bool:
+    """True when the map has at least one link that should be moving."""
+    return any(edge.edge_type in _FLOW_TYPES for edge in snapshot.edges)
+
+
 def _sample_pulse(state: ViewState) -> None:
     """Append one liveness sample per second from a real event counter."""
     if state.now - state.pulse_at < animation.IDLE_SECONDS:
@@ -566,7 +575,9 @@ def _run_event_loop(ctx: UiContext, watcher: MapSnapshotWatcher) -> Path | None:
             dirty = False
         # Animate only while something is actually moving, and poll quickly
         # while the watcher is rebuilding a snapshot the UI asked for.
-        animating = state.animation and bool(state.ripples or snapshot.active_scans)
+        animating = state.animation and bool(
+            state.ripples or snapshot.active_scans or _has_flow(snapshot)
+        )
         window.timeout(animation.tick_timeout(animating or state.notify_active()))
         if animating or state.notify_active() or watcher.pending:
             dirty = True

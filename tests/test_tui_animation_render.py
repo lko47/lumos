@@ -83,11 +83,18 @@ class FlowDotTests(unittest.TestCase):
             positions.append(set(dots))
         self.assertGreater(len({frozenset(item) for item in positions}), 1)
 
-    def test_inferred_link_never_moves(self) -> None:
+    def test_inferred_link_still_shows_reachability(self) -> None:
         state = render.ViewState()
         state.animation = True
         state.now = 1.0
-        glyphs = draw(snapshot(edge_type="inferred", derived=True), state).cells()
+        glyphs = draw(snapshot(edge_type="inferred", derived=False), state).cells()
+        self.assertIn(animation.FLOW_GLYPH, glyphs.values())
+
+    def test_manual_link_never_moves(self) -> None:
+        state = render.ViewState()
+        state.animation = True
+        state.now = 1.0
+        glyphs = draw(snapshot(edge_type="manual"), state).cells()
         self.assertNotIn(animation.FLOW_GLYPH, glyphs.values())
 
     def test_animation_toggle_stills_the_map(self) -> None:

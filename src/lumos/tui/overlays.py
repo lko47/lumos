@@ -157,7 +157,7 @@ def draw_help(window: Any, styles: dict[str, int], unicode_ok: bool) -> None:
     mouse.add(top, left, box_height, box_width, {"kind": "close"})
     footer_row = itop + ih - 2
     safe_addstr(window, footer_row, ileft,
-                "Links are observed or marked inferred; p/x decide, i hides, o/O hubs.",
+                "Dots: bright = measured path, dim = reachability only. p/x decide, i hides, o/O hubs.",
                 iw, _attr(styles, "muted"), unicode_ok=unicode_ok)
     safe_addstr(window, footer_row + 1, ileft,
                 "Press any key to return.", iw, _attr(styles, "accent"), unicode_ok=unicode_ok)

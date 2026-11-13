@@ -300,9 +300,25 @@ def draw_map_panel(
     return projected, (itop, ileft, ih, iw)
 
 
-# Links whose direction was measured.  Inferred, manual and imported links are
-# never animated: motion is a claim about measured direction.
-_FLOW_EDGE_TYPES = frozenset({"traceroute", "observed"})
+# Motion is graded by what we actually know.  A traceroute chain is measured,
+# so its dot is bright.  An inferred or local link is a reachability claim, not
+# a path: its dot is dim, and the help says so.  Manual and imported links are
+# not observations at all and never move.
+_FLOW_BRIGHT_TYPES = frozenset({"traceroute", "observed"})
+_FLOW_DIM_TYPES = frozenset({"inferred", "local"})
+
+
+def _flow_style(edge: Any) -> str | None:
+    """Style token for an animated link, or None when it must stay still.
+
+    Keyed on ``edge_type`` rather than ``derived``: every edge Lumos infers is
+    marked derived, so filtering on that flag would still the whole map.
+    """
+    if edge.edge_type in _FLOW_BRIGHT_TYPES:
+        return "flow"
+    if edge.edge_type in _FLOW_DIM_TYPES:
+        return "muted"
+    return None
 
 
 def _draw_flow_dots(
@@ -320,7 +336,8 @@ def _draw_flow_dots(
     itop, ileft, ih, iw = rect
     glyph = animation.FLOW_GLYPH if unicode_ok else animation.FLOW_GLYPH_ASCII
     for edge in snapshot.edges:
-        if edge.derived or edge.edge_type not in _FLOW_EDGE_TYPES:
+        style = _flow_style(edge)
+        if style is None:
             continue
         start = projected.get(edge.from_node_id)
         end = projected.get(edge.to_node_id)
@@ -329,7 +346,7 @@ def _draw_flow_dots(
         x, y = animation.flow_position(start, end, animation.phase_for(edge.id), state.now)
         if 0 <= x < iw and 0 <= y < ih:
             safe_addstr(window, itop + y, ileft + x, glyph, 1,
-                        _attr(styles, "flow"), unicode_ok=unicode_ok)
+                        _attr(styles, style), unicode_ok=unicode_ok)
 
 
 def _draw_ripples(
