@@ -31,7 +31,7 @@ from .core.scan_store import ScanStoreError
 from .core.vantage_store import save_interfaces
 from .core.scope_store import add_scope_rule
 from .core.xml_import import import_nmap_xml
-from .services import actions, notes
+from .services import actions, compare, notes
 from .core import state as local_state
 
 AUTHORIZED_USE_NOTICE = "Authorized use only: scan systems and networks you own or are explicitly permitted to assess. Confirm scope and permissions before proceeding."
@@ -126,6 +126,13 @@ def _parser() -> argparse.ArgumentParser:
     tui = commands.add_parser("tui", help="open the interactive map (plain output when redirected)")
     tui.add_argument("database", type=Path, help="engagement database")
 
+    compare_cmd = commands.add_parser("compare", help="diff two scans of this engagement")
+    compare_cmd.add_argument("database", type=Path)
+    compare_cmd.add_argument("--from", dest="from_scan", default="", help="older scan id or prefix")
+    compare_cmd.add_argument("--to", dest="to_scan", default="", help="newer scan id or prefix")
+    compare_cmd.add_argument("--list", action="store_true", dest="list_scans",
+                             help="list completed scans")
+
     note = commands.add_parser("note", help="attach or list notes")
     note.add_argument("database", type=Path)
     note.add_argument("body", nargs="?", default="", help="note text (omit with --list)")
@@ -194,7 +201,7 @@ def _open_default(path: Path | None) -> int:
 
 
 SUBCOMMANDS = frozenset(
-    {"db", "scope", "interfaces", "scan", "import", "tui", "report", "note"}
+    {"db", "scope", "interfaces", "scan", "import", "tui", "report", "note", "compare"}
 )
 
 
@@ -233,6 +240,29 @@ def _print_progress(text: str) -> None:
     line = text.rstrip()
     if line:
         print(line, file=sys.stderr, flush=True)
+
+
+def _run_compare(args: Any) -> int:
+    try:
+        if args.list_scans:
+            scans = compare.recent_scans(args.database, limit=20)
+            if not scans:
+                print("no completed scans")
+                return 0
+            for scan in scans:
+                print(f"{scan.id}  {scan.started_at}  {scan.targets}")
+            return 0
+        recent = compare.recent_scans(args.database, limit=2)
+        if not args.from_scan and not args.to_scan and len(recent) < 2:
+            print("lumos: need two completed scans, or use --from/--to", file=sys.stderr)
+            return 2
+        right = compare.resolve_scan(args.database, args.to_scan) if args.to_scan else recent[0]
+        left = compare.resolve_scan(args.database, args.from_scan) if args.from_scan else recent[1]
+        print(compare.render_text(compare.diff_scans(args.database, left.id, right.id)), end="")
+        return 0
+    except compare.CompareError as exc:
+        print(f"lumos: {exc}", file=sys.stderr)
+        return 2
 
 
 def _run_note(args: Any) -> int:
@@ -280,6 +310,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command is None:
         return _open_default(None)
     try:
+        if args.command == "compare":
+            return _run_compare(args)
         if args.command == "note":
             return _run_note(args)
         if args.command == "interfaces":
