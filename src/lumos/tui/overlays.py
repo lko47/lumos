@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Sequence
 
+from . import mouse
 from .widgets import clear_overlays, clip, draw_box, remember_overlay, safe_addstr
 
 
@@ -151,6 +152,7 @@ def draw_help(window: Any, styles: dict[str, int], unicode_ok: bool) -> None:
                             clip(text, max(0, column_width - 12)), max(0, column_width - 12),
                             _attr(styles, "help_text"), unicode_ok=unicode_ok)
             row += len(entries) + 2
+    mouse.add(top, left, box_height, box_width, {"kind": "close"})
     footer_row = itop + ih - 2
     safe_addstr(window, footer_row, ileft,
                 "Links are observed or marked inferred; p/x decide, i hides, o/O hubs.",
@@ -168,7 +170,9 @@ def draw_palette(
     index: int,
 ) -> None:
     height, width = window.getmaxyx()
-    top, left, box_height, box_width = _place(window, min(66, max(28, width - 4)), min(len(entries) + 3, max(7, height - 4)))
+    top, left, box_height, box_width = _place(
+        window, min(66, max(28, width - 4)), min(len(entries) + 3, max(7, height - 4))
+    )
     itop, ileft, ih, iw = draw_box(
         window, top, left, box_height, box_width, title=" COMMAND PALETTE ",
         border_attr=_attr(styles, "border_focus"), title_attr=_attr(styles, "brand"),
@@ -183,6 +187,7 @@ def draw_palette(
         pointer = "▶" if selected and unicode_ok else ">" if selected else " "
         text = f"{pointer} {label:<22} {description}"
         safe_addstr(window, itop + offset, ileft, clip(text, iw), iw, style, unicode_ok=unicode_ok)
+        mouse.add(itop + offset, ileft, 1, iw, {"kind": "palette", "index": offset})
     input_row = itop + ih - 1
     safe_addstr(window, input_row, ileft, "❯ " if unicode_ok else "> ", 2,
                 _attr(styles, "accent"), unicode_ok=unicode_ok)

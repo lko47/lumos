@@ -71,7 +71,10 @@ def _draw(
         safe_addstr(window, row, 3, clip(line, width - 4), width - 4, attr, unicode_ok=unicode_ok)
         row += 1
     if message:
-        safe_addstr(window, height - 4, 3, clip(message, width - 6), width - 6, styles.get("error", 0), unicode_ok=unicode_ok)
+        safe_addstr(
+            window, height - 4, 3, clip(message, width - 6), width - 6,
+            styles.get("error", 0), unicode_ok=unicode_ok,
+        )
     safe_addstr(
         window,
         height - 2,
@@ -96,7 +99,9 @@ def _run_start(window: Any) -> None:
         pass
     capability = theme.detect_capability()
     theme_name = os.environ.get("LUMOS_THEME", "").strip().lower()
-    theme_name = theme_name if theme_name in theme.THEMES else ("mono" if capability == theme.CAPABILITY_MONO else "aurora")
+    theme_name = theme_name if theme_name in theme.THEMES else (
+        "mono" if capability == theme.CAPABILITY_MONO else "aurora"
+    )
     styles = theme.init_styles(theme_name, capability)
     unicode_ok = _unicode_enabled()
     window.timeout(1000)

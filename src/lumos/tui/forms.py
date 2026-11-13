@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 import textwrap
 
+from . import mouse
 from .widgets import (
     clear_overlays,
     draw_box,
@@ -138,6 +139,7 @@ def _draw(
             _attr(styles, "text"),
             unicode_ok=unicode_ok,
         )
+        mouse.add(row, ileft, 1, iw, {"kind": "field", "index": index})
         row += 1
     row += 1
     for line in note_lines:
@@ -163,7 +165,18 @@ def _draw(
         _attr(styles, "muted"),
         unicode_ok=unicode_ok,
     )
+    _register_controls(itop + ih - 1, ileft, iw)
     window.refresh()
+
+
+def _register_controls(row: int, left: int, width: int) -> None:
+    """Make the dialog's Save and Cancel affordances clickable.
+
+    Mirrors the drawn hint line: "Enter save ... Esc cancel".
+    """
+    span = max(1, width // 2)
+    mouse.add(row, left, 1, span, {"kind": "submit"})
+    mouse.add(row, left + span, 1, max(1, width - span), {"kind": "cancel"})
 
 
 def run_form(
@@ -198,6 +211,21 @@ def run_form(
             key = window.getch()
             if key == -1:
                 continue
+            if mouse.is_mouse(key):
+                _event, action = mouse.read_action(window)
+                if action is None:
+                    continue
+                kind = str(action.get("kind", ""))
+                if kind == "field":
+                    active = int(action.get("index", 0)) % max(1, len(fields))
+                    error = ""
+                    continue
+                if kind == "cancel":
+                    return None
+                if kind == "submit":
+                    key = 10
+                else:
+                    continue
             if key == 27:
                 return None
             if key in (curses_keys.ENTER):
@@ -303,11 +331,21 @@ def confirm(
         _attr(styles, "muted"),
         unicode_ok=unicode_ok,
     )
+    mouse.add(itop, ileft, max(1, ih - 1), max(1, iw // 2), {"kind": "yes"})
+    mouse.add(itop, ileft + max(1, iw // 2), max(1, ih - 1), max(1, iw // 2), {"kind": "no"})
     window.refresh()
     window.timeout(-1)
     try:
         while True:
             key = window.getch()
+            if mouse.is_mouse(key):
+                _event, action = mouse.read_action(window)
+                kind = str((action or {}).get("kind", ""))
+                if kind == "yes":
+                    return True
+                if kind == "no":
+                    return False
+                continue
             if key in (ord("y"), ord("Y")):
                 return True
             if key in (ord("n"), ord("N"), 27):
@@ -360,6 +398,7 @@ def choose(
                 prefix = f"{marker} " if position == index else "  "
                 attr = _attr(styles, "accent") if position == index else _attr(styles, "text")
                 safe_addstr(window, row, ileft, prefix + option, iw, attr, unicode_ok=unicode_ok)
+                mouse.add(row, ileft, 1, iw, {"kind": "option", "index": position})
                 row += 1
             if note and itop + ih - 2 >= row:
                 safe_addstr(window, itop + ih - 2, ileft, note, iw, _attr(styles, "muted"), unicode_ok=unicode_ok)
@@ -376,6 +415,21 @@ def choose(
             key = window.getch()
             if key == -1:
                 continue
+            if mouse.is_mouse(key):
+                _event, action = mouse.read_action(window)
+                if action is None:
+                    continue
+                kind = str(action.get("kind", ""))
+                if kind == "field":
+                    active = int(action.get("index", 0)) % max(1, len(fields))
+                    error = ""
+                    continue
+                if kind == "cancel":
+                    return None
+                if kind == "submit":
+                    key = 10
+                else:
+                    continue
             if key == 27:
                 return None
             if key in curses_keys.ENTER:

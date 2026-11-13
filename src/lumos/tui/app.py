@@ -19,6 +19,7 @@ from ..services import actions
 from ..services.map_view import MapSnapshot, MapSnapshotWatcher, load_map_snapshot, render_plain_snapshot
 from . import theme
 from . import flows
+from . import mouse
 from .overlays import draw_help, draw_palette
 from .widgets import set_backdrop
 from .render import (
@@ -142,6 +143,54 @@ def _search(snapshot: MapSnapshot, query: str) -> int | None:
     return None
 
 
+def _mouse_key(window: Any, state: ViewState, snapshot: MapSnapshot) -> int | None:
+    """Turn a mouse report into state changes or a synthetic key press.
+
+    Returns a key code when the click should replay a keyboard shortcut, or
+    ``None`` when the click was applied directly (tabs, list rows, map nodes).
+    """
+    event = mouse.read(window)
+    if event is None:
+        return None
+    if event.kind == "scroll":
+        _scroll(state, snapshot, event.direction)
+        return None
+    action = mouse.hit(event.y, event.x)
+    if not action:
+        return None
+    kind = str(action.get("kind", ""))
+    if kind == "view":
+        _set_view(state, str(action.get("value", "map")))
+        return None
+    if kind == "node":
+        state.selected_kind = "node"
+        state.selected = int(action.get("index", 0))
+        if not action.get("keep_view"):
+            _set_view(state, "map")
+        return None
+    if kind == "scan":
+        state.scan_selected = int(action.get("index", 0))
+        if not action.get("keep_view"):
+            _set_view(state, "scans")
+        return None
+    if kind == "key":
+        value = str(action.get("value", ""))
+        return ord(value[0]) if value else None
+    return None
+
+
+def _scroll(state: ViewState, snapshot: MapSnapshot, direction: int) -> None:
+    """Wheel up zooms the map in, wheel down out; lists move their selection."""
+    if state.view == "map":
+        state.viewport = (
+            state.viewport.zoom_in() if direction < 0 else state.viewport.zoom_out()
+        )
+    elif state.view == "hosts":
+        _move_selection(state, snapshot, direction)
+    else:
+        state.scan_selected = max(0, state.scan_selected + direction)
+
+
 def _draw_frame(
     window: Any,
     snapshot: MapSnapshot,
@@ -153,6 +202,7 @@ def _draw_frame(
 ) -> None:
     height, width = window.getmaxyx()
     window.erase()
+    mouse.clear()
     if height < MIN_HEIGHT or width < MIN_WIDTH:
         safe_addstr(
             window,
@@ -213,7 +263,9 @@ def _show_help(
         _draw_frame(window, snapshot, state, styles, unicode_ok, theme_name, capability)
         draw_help(window, styles, unicode_ok)
         window.refresh()
-        window.getch()
+        key = window.getch()
+        if mouse.is_mouse(key):
+            mouse.read_action(window)  # any click closes, like Escape
     finally:
         window.timeout(1000)
 
@@ -246,6 +298,12 @@ def _pick_command(
             key = window.getch()
             if key == -1:
                 continue
+            if mouse.is_mouse(key):
+                _event, action = mouse.read_action(window)
+                kind = str((action or {}).get("kind", ""))
+                if kind == "palette":
+                    return entries[int(action.get("index", 0))][2] if entries else None
+                return None
             if key == 27:
                 return None
             if key in (10, 13, curses.KEY_ENTER):
@@ -273,6 +331,7 @@ def _pick_command(
 
 def _run_curses(window: Any, database: Path) -> None:
     window.keypad(True)
+    mouse.enable(window)
     try:
         curses.curs_set(0)
     except curses.error:
@@ -351,6 +410,12 @@ def _run_event_loop(
             dirty = True
         if key == -1:
             continue
+        if key == curses.KEY_MOUSE:
+            key = _mouse_key(window, state, snapshot)
+            if key is None:
+                dirty = True
+                _clamp_selection(state, snapshot)
+                continue
         dirty = True
         if key == curses.KEY_RESIZE:
             window.clearok(True)

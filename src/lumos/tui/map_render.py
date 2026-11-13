@@ -8,6 +8,7 @@ from ..core.decisions import describe_edge
 from ..services.map_view import MapSnapshot, edge_class
 from .braille import BrailleCanvas
 from .layout import compute_layout
+from . import mouse
 from .widgets import (
     clip,
     dash,
@@ -288,6 +289,7 @@ def draw_map_panel(
         )
         safe_addstr(window, itop + point[1], ileft + x, clip(text, iw - x, unicode_ok=unicode_ok),
                     iw - x, _attr(styles, style_name), unicode_ok=unicode_ok)
+        mouse.add(itop + point[1], ileft + x, 1, max(1, len(text)), {"kind": "node", "index": index})
     if not snapshot.nodes:
         safe_addstr(window, itop, ileft, f"No nodes yet {dash(unicode_ok)} run a scan with the CLI.", iw,
                     _attr(styles, "muted"), unicode_ok=unicode_ok)

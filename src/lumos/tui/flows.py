@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from ..services import actions
 from . import forms
+from . import mouse
 from .widgets import clear_overlays, clip, draw_box, remember_overlay, safe_addstr
 
 
@@ -63,6 +64,7 @@ def show_result(
         _attr(styles, "muted"),
         unicode_ok=unicode_ok,
     )
+    mouse.add(itop - 1, ileft - 1, ih + 2, iw + 2, {"kind": "close"})
     window.refresh()
     window.timeout(-1)
     try:
@@ -238,10 +240,17 @@ def flow_scope(window: Any, styles: dict[str, int], unicode_ok: bool, database: 
                 _attr(styles, "muted"),
                 unicode_ok=unicode_ok,
             )
+            mouse.add(itop + ih - 1, ileft, 1, iw, {"kind": "cancel_scan"})
             window.refresh()
             key = window.getch()
             if key == -1:
                 continue
+            if mouse.is_mouse(key):
+                _event, action = mouse.read_action(window)
+                if str((action or {}).get("kind", "")) != "cancel_scan":
+                    confirm_cancel = False
+                    continue
+                key = 27
             if key == 27:
                 return None
             if key in (forms.curses_keys.UP, ord("k")):
@@ -313,7 +322,10 @@ def flow_scan(
         [
             forms.Field("targets", "targets", value=scope_targets, hint="space separated"),
             forms.Field("network", "network", value="default"),
-            forms.Field("preset", "preset", value="connect", kind="choice", choices=("connect", "service", "udp", "custom")),
+            forms.Field(
+                "preset", "preset", value="connect", kind="choice",
+                choices=("connect", "service", "udp", "custom"),
+            ),
             forms.Field("options", "options", hint="extra Nmap options"),
             forms.Field("interface", "interface", value="auto", kind="choice", choices=_interface_choices()),
             forms.Field("evidence", "evidence", value="1", kind="bool", hint="keep raw XML"),
@@ -404,7 +416,10 @@ def _watch_scan(
                 unicode_ok=unicode_ok,
             )
             if command:
-                safe_addstr(window, itop + 1, ileft, clip(command, iw), iw, _attr(styles, "muted"), unicode_ok=unicode_ok)
+                safe_addstr(
+                    window, itop + 1, ileft, clip(command, iw), iw,
+                    _attr(styles, "muted"), unicode_ok=unicode_ok,
+                )
             row = itop + 3
             shown = lines[-4:] or ["Nmap is working; hosts appear when the XML lands."]
             for line in shown:
@@ -416,15 +431,26 @@ def _watch_scan(
                 window,
                 itop + ih - 1,
                 ileft,
-                "Esc twice cancels; finished hosts are kept" if not job.cancel_event.is_set() else "cancelling; finished hosts are kept",
+                (
+                    "Esc twice cancels; finished hosts are kept"
+                    if not job.cancel_event.is_set()
+                    else "cancelling; finished hosts are kept"
+                ),
                 iw,
                 _attr(styles, "muted"),
                 unicode_ok=unicode_ok,
             )
+            mouse.add(itop + ih - 1, ileft, 1, iw, {"kind": "cancel_scan"})
             window.refresh()
             key = window.getch()
             if key == -1:
                 continue
+            if mouse.is_mouse(key):
+                _event, action = mouse.read_action(window)
+                if str((action or {}).get("kind", "")) != "cancel_scan":
+                    confirm_cancel = False
+                    continue
+                key = 27
             if key == 27:
                 if job.cancel_event.is_set():
                     continue
@@ -582,7 +608,10 @@ def flow_activity(
         attr = _attr(styles, "error") if severity == "error" else _attr(styles, "text")
         safe_addstr(window, row, ileft, clip(f"{stamp} {severity:<7} {message}", iw), iw, attr, unicode_ok=unicode_ok)
         row += 1
-    safe_addstr(window, itop + ih - 1, ileft, "w save log   Esc back", iw, _attr(styles, "muted"), unicode_ok=unicode_ok)
+    safe_addstr(
+        window, itop + ih - 1, ileft, "w save log   Esc back", iw,
+        _attr(styles, "muted"), unicode_ok=unicode_ok,
+    )
     window.refresh()
     window.timeout(-1)
     try:
@@ -595,7 +624,10 @@ def flow_activity(
                     path = log.write_to(Path.cwd() / "lumos-log.txt")
                 except OSError:
                     continue
-                safe_addstr(window, itop + ih - 1, ileft, clip(f"wrote {path}", iw), iw, _attr(styles, "accent"), unicode_ok=unicode_ok)
+                safe_addstr(
+                    window, itop + ih - 1, ileft, clip(f"wrote {path}", iw), iw,
+                    _attr(styles, "accent"), unicode_ok=unicode_ok,
+                )
                 window.refresh()
                 window.getch()
                 return

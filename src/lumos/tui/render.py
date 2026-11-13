@@ -11,6 +11,7 @@ from ..core.text import sanitize_text
 from ..services.map_view import MapSnapshot
 from .layout import Viewport
 from .map_render import draw_map_panel, draw_sidebar
+from . import mouse
 from .widgets import (
     clip,
     dash,
@@ -84,6 +85,26 @@ def tab_ranges() -> tuple[tuple[int, int, str], ...]:
     return tuple(hits)
 
 
+# Clickable footer hints: label, description, key replayed when clicked.
+HINTS = (
+    ("q", "quit", "q"),
+    ("?", "help", "?"),
+    (":", "palette", ":"),
+    ("m", "map", "m"),
+    ("v", "hosts", "v"),
+    ("s", "scans", "s"),
+    ("/", "search", "/"),
+    ("t", "theme", "t"),
+    ("+/-", "zoom", "+"),
+    ("HJKL", "pan", "j"),
+    ("0", "reset", "0"),
+    ("o/O", "hub", "o"),
+    ("N", "new", "N"),
+    ("S", "scan", "S"),
+    ("T", "tools", "T"),
+)
+
+
 def draw_header(
     window: Any,
     snapshot: MapSnapshot,
@@ -125,6 +146,7 @@ def draw_header(
         label = f" {view_name.upper()} "
         style = attr(styles, "tab_active") if view_name == state.view else attr(styles, "tab")
         safe_addstr(window, 1, start, clip(label, end - start), end - start, style, unicode_ok=unicode_ok)
+        mouse.add(1, start, 1, end - start, {"kind": "view", "value": view_name})
     right = f"theme {theme_name} {sep} {state.viewport.label} {sep} {capability}c"
     if width > display_width(right) + 30:
         safe_addstr(window, 1, width - display_width(right) - 1, right, display_width(right),
@@ -241,6 +263,8 @@ def draw_hosts_screen(
             style_name = "error"
         safe_addstr(window, itop + 1 + offset, ileft, clip(text, iw, unicode_ok=unicode_ok), iw,
                     attr(styles, style_name), unicode_ok=unicode_ok)
+        mouse.add(itop + 1 + offset, ileft, 1, iw,
+                  {"kind": "node", "index": index, "keep_view": True})
     if not snapshot.nodes:
         safe_addstr(window, itop + 1, ileft, "No hosts recorded yet.", iw,
                     attr(styles, "muted"), unicode_ok=unicode_ok)
@@ -302,6 +326,8 @@ def draw_scans_screen(
         style_name = "selected" if selected else f"scan_{scan.status}"
         safe_addstr(window, itop + 1 + offset, ileft, clip(text, iw, unicode_ok=unicode_ok), iw,
                     attr(styles, style_name, attr(styles, "label")), unicode_ok=unicode_ok)
+        mouse.add(itop + 1 + offset, ileft, 1, iw,
+                  {"kind": "scan", "index": index, "keep_view": True})
         if running and iw > 14:
             progress = 0.15 + 0.7 * (0.5 + 0.5 * math.sin(now * 2.0))
             draw_meter(window, itop + 1 + offset, ileft + iw - 12, 11, progress, styles,
