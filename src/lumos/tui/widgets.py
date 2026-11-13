@@ -210,7 +210,6 @@ def draw_box(
     border_attr: int = 0,
     title_attr: int = 0,
     unicode_ok: bool = True,
-    focused: bool = False,
     clear: bool = True,
 ) -> tuple[int, int, int, int]:
     """Draw a framed panel and return the inner ``(top, left, height, width)``.

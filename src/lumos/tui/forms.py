@@ -126,7 +126,6 @@ def _draw(
         border_attr=_attr(styles, "border_focus"),
         title_attr=_attr(styles, "brand"),
         unicode_ok=unicode_ok,
-        focused=True,
     )
     row = itop
     label_width = min(18, max((len(field.label) for field in fields), default=8) + 1)
@@ -321,7 +320,6 @@ def confirm(
         border_attr=_attr(styles, "border_focus"),
         title_attr=_attr(styles, "brand"),
         unicode_ok=unicode_ok,
-        focused=True,
     )
     for offset, line in enumerate(_wrap(question, iw, max_lines=2)):
         safe_addstr(window, itop + offset, ileft, line, iw, _attr(styles, "text"), unicode_ok=unicode_ok)
@@ -395,7 +393,6 @@ def choose(
                 border_attr=_attr(styles, "border_focus"),
                 title_attr=_attr(styles, "brand"),
                 unicode_ok=unicode_ok,
-                focused=True,
             )
             row = itop
             for position, option in enumerate(options):
@@ -558,7 +555,7 @@ def confirm_scope(
         itop, ileft, ih, iw = draw_box(
             window, top, left, box_height, box_width,
             title=f" {title} ", border_attr=_attr(styles, "border_focus"),
-            title_attr=_attr(styles, "brand"), unicode_ok=unicode_ok, focused=True,
+            title_attr=_attr(styles, "brand"), unicode_ok=unicode_ok,
         )
         row = itop
         for line in info:
@@ -674,7 +671,7 @@ def engine_settings(
                 title=" enumeration ",
                 border_attr=_attr(styles, "border_focus"),
                 title_attr=_attr(styles, "brand"),
-                unicode_ok=unicode_ok, focused=True,
+                unicode_ok=unicode_ok,
             )
             safe_addstr(
                 window, itop, ileft, "Installed commands to enumerate with:", iw,

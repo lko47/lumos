@@ -272,7 +272,7 @@ def draw_hosts_screen(
         window, 2, 0, height - 4, width,
         title=f" HOSTS  {len(snapshot.nodes)} ",
         border_attr=attr(styles, "border_focus"), title_attr=attr(styles, "title"),
-        unicode_ok=unicode_ok, focused=True,
+        unicode_ok=unicode_ok,
     )
     widths = (16, min(26, max(14, iw // 3)), min(30, max(12, iw // 4)), 6, 6)
     heading = " ".join(
@@ -323,7 +323,7 @@ def draw_scans_screen(
     itop, ileft, ih, iw = draw_box(
         window, 2, 0, height - 4, width, title=title,
         border_attr=attr(styles, "border_focus"), title_attr=attr(styles, "title"),
-        unicode_ok=unicode_ok, focused=True,
+        unicode_ok=unicode_ok,
     )
     if not scans:
         safe_addstr(window, itop, ileft,

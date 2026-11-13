@@ -9,6 +9,7 @@ recorded rather than silently rehomed.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import uuid
 from dataclasses import dataclass, field
@@ -83,8 +84,24 @@ class MergeStats:
         return sum(self.rows.values())
 
 
+IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _identifier(name: str) -> str:
+    """Table and schema names are interpolated into SQL, so they must be names.
+
+    They come from a fixed catalogue, but a merge reads a *foreign* database:
+    validating here means a hand-edited file cannot turn a table name into SQL.
+    """
+    if not IDENTIFIER.match(name):
+        raise MergeError(f"refusing a non-identifier table name: {name!r}")
+    return name
+
+
 def _columns(conn: sqlite3.Connection, schema: str, table: str) -> list[str]:
-    rows = conn.execute(f"PRAGMA {schema}.table_info({table})").fetchall()
+    rows = conn.execute(
+        f"PRAGMA {_identifier(schema)}.table_info({_identifier(table)})"
+    ).fetchall()
     return [str(row[1]) for row in rows]
 
 
@@ -92,9 +109,12 @@ def _count(conn: sqlite3.Connection, table: str, engagement_id: str) -> int:
     columns = _columns(conn, "main", table)
     if "engagement_id" in columns:
         return int(
-            conn.execute(f"SELECT COUNT(*) FROM {table} WHERE engagement_id = ?", (engagement_id,)).fetchone()[0]
+            conn.execute(
+                f"SELECT COUNT(*) FROM {_identifier(table)} WHERE engagement_id = ?",
+                (engagement_id,),
+            ).fetchone()[0]
         )
-    return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+    return int(conn.execute(f"SELECT COUNT(*) FROM {_identifier(table)}").fetchone()[0])
 
 
 def _log(
@@ -151,9 +171,15 @@ def _copy_rows(
         if not columns:
             continue
         placeholders = ",".join("?" for _ in columns)
-        statement = f"INSERT OR IGNORE INTO {table}({','.join(columns)}) VALUES ({placeholders})"
+        statement = (
+            f"INSERT OR IGNORE INTO {_identifier(table)}"
+            f"({','.join(_identifier(column) for column in columns)}) VALUES ({placeholders})"
+        )
         renamed = "engagement_id" in columns
-        cursor = source.execute(f"SELECT {','.join(columns)} FROM {table}")
+        cursor = source.execute(
+            f"SELECT {','.join(_identifier(column) for column in columns)}"
+            f" FROM {_identifier(table)}"
+        )
         inserted = 0
         while True:
             batch = cursor.fetchmany(CHUNK)

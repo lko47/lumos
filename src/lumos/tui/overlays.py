@@ -33,7 +33,7 @@ def draw_help(window: Any, styles: dict[str, int], unicode_ok: bool) -> None:
     itop, ileft, ih, iw = draw_box(
         window, top, left, box_height, box_width, title=" HELP ",
         border_attr=_attr(styles, "border_focus"), title_attr=_attr(styles, "brand"),
-        unicode_ok=unicode_ok, focused=True,
+        unicode_ok=unicode_ok,
     )
     columns: tuple[tuple[tuple[str, tuple[tuple[str, str], ...]], ...], ...]
     if iw >= 76:
@@ -180,7 +180,7 @@ def draw_palette(
     itop, ileft, ih, iw = draw_box(
         window, top, left, box_height, box_width, title=" COMMAND PALETTE ",
         border_attr=_attr(styles, "border_focus"), title_attr=_attr(styles, "brand"),
-        unicode_ok=unicode_ok, focused=True,
+        unicode_ok=unicode_ok,
     )
     if not entries:
         safe_addstr(window, itop, ileft, "No matching command", iw, _attr(styles, "muted"),

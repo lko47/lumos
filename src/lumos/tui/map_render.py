@@ -192,7 +192,6 @@ def draw_map_panel(
         border_attr=_attr(styles, "border_focus"),
         title_attr=_attr(styles, "title"),
         unicode_ok=unicode_ok,
-        focused=True,
     )
     if ih < 2 or iw < 4:
         return {}, (itop, ileft, ih, iw)

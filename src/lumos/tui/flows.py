@@ -51,7 +51,6 @@ def _box(window: Any, styles: dict[str, int], unicode_ok: bool, *, title: str, w
         border_attr=_attr(styles, "border_focus"),
         title_attr=_attr(styles, "brand"),
         unicode_ok=unicode_ok,
-        focused=True,
     )
 
 
