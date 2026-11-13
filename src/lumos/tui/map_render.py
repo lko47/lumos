@@ -268,6 +268,8 @@ def draw_map_panel(
         if node.kind == "zone" and node.member_count:
             separator = " · " if unicode_ok else " * "
             label = f"{node.label}{separator}{node.member_count}"
+        elif getattr(node, "duplicate_count", 1) > 1:
+            label = f"{node.label} ×{node.duplicate_count}"
         else:
             label = node.label
         marker = _KIND_GLYPHS.get(

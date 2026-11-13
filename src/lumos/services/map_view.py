@@ -7,7 +7,7 @@ import queue
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from ..core.database import DatabaseError, open_database
@@ -37,6 +37,7 @@ class MapNode:
     placeholder: bool = False
     zone_id: str = ""
     ttl_hops: int | None = None
+    duplicate_count: int = 1
 
 
 def ttl_hops(reason_ttl: int | None) -> int | None:
@@ -83,6 +84,66 @@ def _evidence(raw: object) -> dict:
     except (TypeError, ValueError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def collapse_duplicates(
+    nodes: list[MapNode], edges: tuple[MapEdge, ...]
+) -> tuple[list[MapNode], tuple[MapEdge, ...]]:
+    """Show one node per address set, without merging anything in the database.
+
+    Devices are deliberately never auto-merged: the same host seen by three
+    scans stays three device rows plus duplicate proposals, because merging by
+    address alone can fuse two machines behind NAT.  The map, however, must not
+    look like three machines.  This collapses device nodes that carry the same
+    addresses onto the first one, keeps a duplicate count for the label, and
+    rewrites edges so the graph stays consistent.
+    """
+    groups: dict[tuple[str, ...], MapNode] = {}
+    aliases: dict[str, str] = {}
+    collapsed: list[MapNode] = []
+    counts: dict[str, int] = {}
+    reviews: dict[str, int] = {}
+    for node in nodes:
+        key = tuple(sorted(address.lower() for address in node.addresses))
+        if node.kind != "device" or not key:
+            collapsed.append(node)
+            continue
+        first = groups.get(key)
+        if first is None:
+            groups[key] = node
+            counts[node.id] = 1
+            reviews[node.id] = node.review_count
+            collapsed.append(node)
+            continue
+        aliases[node.id] = first.id
+        counts[first.id] = counts.get(first.id, 1) + 1
+        reviews[first.id] = reviews.get(first.id, 0) + node.review_count
+
+    if not aliases:
+        return nodes, edges
+
+    collapsed = [
+        replace(
+            node,
+            duplicate_count=counts.get(node.id, 1),
+            review_count=reviews.get(node.id, node.review_count),
+        )
+        if node.id in counts
+        else node
+        for node in collapsed
+    ]
+
+    merged: dict[tuple[str, str, str], MapEdge] = {}
+    for edge in edges:
+        if edge.from_node_id == edge.to_node_id:
+            continue
+        source = aliases.get(edge.from_node_id, edge.from_node_id)
+        target = aliases.get(edge.to_node_id, edge.to_node_id)
+        if source == target:
+            continue
+        key = (source, target, edge.edge_type)
+        merged.setdefault(key, replace(edge, from_node_id=source, to_node_id=target))
+    return collapsed, tuple(merged.values())
 
 
 def edge_class(edge: MapEdge) -> str:
@@ -316,6 +377,9 @@ def load_map_snapshot(
                     ttl_hops=ttl_hops(row["reason_ttl"]),
                 )
             )
+
+        nodes, edges = collapse_duplicates(nodes, edges)
+        node_ids = {node.id for node in nodes}
 
         # The loader never fabricates connectivity; hop distance is BFS over stored edges only.
         adjacency: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
