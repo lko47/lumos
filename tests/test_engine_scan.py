@@ -33,6 +33,10 @@ class EngineScanTests(unittest.TestCase):
         )
         patcher.start()
         self.addCleanup(patcher.stop)
+        enabled = mock.patch.object(engines, "load_enabled", return_value=frozenset(
+            {"nmap", "masscan", "naabu", "rustscan"}))
+        enabled.start()
+        self.addCleanup(enabled.stop)
 
     def test_masscan_xml_is_imported_and_recorded_as_masscan(self) -> None:
         scan_id, hosts, _message = engine_scan.scan_with_engine(
@@ -122,6 +126,10 @@ class JsonAndGreppableEngineTests(unittest.TestCase):
         )
         patcher.start()
         self.addCleanup(patcher.stop)
+        enabled = mock.patch.object(engines, "load_enabled", return_value=frozenset(
+            {"nmap", "masscan", "naabu", "rustscan"}))
+        enabled.start()
+        self.addCleanup(enabled.stop)
 
     def _ports(self) -> list[int]:
         import sqlite3
@@ -169,6 +177,29 @@ class JsonAndGreppableEngineTests(unittest.TestCase):
                 "SELECT redacted_args_json FROM scans WHERE id = ?", (scan_id,)
             ).fetchone()[0]
         self.assertIn("naabu", args)
+
+
+class SettingsGateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.database = Path(self.tmp.name) / "gate.sqlite"
+        initialize_database(self.database, "gate")
+        add_scope_rule(self.database, "lab", "192.0.2.0/24", included=True)
+        patcher = mock.patch.dict(
+            os.environ,
+            {"PATH": f"{BIN_DIR}{os.pathsep}{FAKE_DIR}{os.pathsep}{os.environ.get('PATH', '')}"},
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_an_engine_switched_off_in_settings_is_refused(self) -> None:
+        gone = mock.patch.object(engines, "load_enabled", return_value=frozenset({"nmap"}))
+        gone.start()
+        self.addCleanup(gone.stop)
+        with self.assertRaises(engine_scan.EngineScanError) as caught:
+            engine_scan.scan_with_engine(self.database, "lab", "masscan", "192.0.2.40")
+        self.assertIn("switched off", str(caught.exception))
 
 
 if __name__ == "__main__":

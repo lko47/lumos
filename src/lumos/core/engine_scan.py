@@ -236,6 +236,10 @@ def scan_with_engine(
     binary = engines.which(engine.binary)
     if binary is None:
         raise EngineScanError(f"{engine.binary} is not installed on this machine")
+    if engine.name not in engines.load_enabled():
+        raise EngineScanError(
+            f"{engine.name} is switched off in the enumeration settings"
+        )
     cleaned_target = sanitize_text(target, max_chars=256).strip()
     if not cleaned_target:
         raise EngineScanError("a target is required")
