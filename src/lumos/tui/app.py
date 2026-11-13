@@ -18,7 +18,7 @@ from ..core.decisions import DecisionError, record_decision
 from ..core.text import sanitize_text
 from ..services import actions
 from ..services.map_view import MapSnapshot, MapSnapshotWatcher, load_map_snapshot, render_plain_snapshot
-from ..services import workspace
+from ..services import workspace, path_view
 from ..core import engines
 from . import theme
 from . import flows
@@ -225,11 +225,12 @@ def _mouse_key(
     state: ViewState,
     snapshot: MapSnapshot,
     layout: "FrameLayout | None" = None,
-) -> int | None:
-    """Turn a mouse report into state changes or a synthetic key press.
+) -> int | str | None:
+    """Turn a mouse report into state changes, a UI action, or a key press.
 
-    Returns a key code when the click should replay a keyboard shortcut, or
-    ``None`` when the report was applied directly (drag pan, zoom, tabs, rows).
+    Returns a key code when the click should replay a keyboard shortcut, the
+    name of a sidebar button when one was hit, or ``None`` when the report was
+    applied directly (drag pan, zoom, tabs, rows).
     """
     event = mouse.read(window)
     if event is None:
@@ -310,7 +311,61 @@ def _zoom_with_wheel(
     state.viewport = state.viewport.zoom_at(ax, ay, iw, ih, direction)
 
 
-def _click(state: ViewState, event: "mouse.MouseEvent") -> int | None:
+def _refresh_path(state: ViewState, snapshot: MapSnapshot) -> None:
+    """Recompute the highlighted path; node ids vanish when a hub collapses."""
+    if not (state.path_start and state.path_end):
+        state.path_nodes = frozenset()
+        state.path_edges = frozenset()
+        state.path_hops = 0
+        return
+    nodes, edges = path_view.path_between(snapshot, state.path_start, state.path_end)
+    state.path_nodes = frozenset(nodes)
+    state.path_edges = edges
+    state.path_hops = path_view.hop_count(nodes)
+    if not nodes:
+        state.path_start = ""
+        state.path_end = ""
+        state.notify("no visible path; expand a hub or clear the selection")
+
+
+def _ui_action(state: ViewState, snapshot: MapSnapshot, name: str) -> bool:
+    """Run a sidebar button; returns True when the snapshot must be reloaded."""
+    node = (
+        snapshot.nodes[state.selected]
+        if state.selected_kind == "node" and 0 <= state.selected < len(snapshot.nodes)
+        else None
+    )
+    if name == "zone_toggle":
+        if node is None or node.kind != "zone":
+            return False
+        state.expanded_zone = "" if state.expanded_zone == node.zone_id else node.zone_id
+        return True
+    if name == "collapse_all":
+        state.expanded_zone = ""
+        state.notify("hubs collapsed")
+        return True
+    if name == "path_clear":
+        state.path_start = ""
+        state.path_end = ""
+        _refresh_path(state, snapshot)
+        state.notify("path cleared")
+        return False
+    if name in {"path_start", "path_end"}:
+        if node is None:
+            state.notify("select a node first")
+            return False
+        if name == "path_start":
+            state.path_start = node.id
+        else:
+            state.path_end = node.id
+        _refresh_path(state, snapshot)
+        if state.path_hops:
+            state.notify(f"path: {state.path_hops} hop(s)")
+        return False
+    return False
+
+
+def _click(state: ViewState, event: "mouse.MouseEvent") -> int | str | None:
     """Apply the hotspot under a click; returns a key to replay when relevant."""
     action = mouse.hit(event.y, event.x)
     if not action:
@@ -330,6 +385,8 @@ def _click(state: ViewState, event: "mouse.MouseEvent") -> int | None:
         if not action.get("keep_view"):
             _set_view(state, "scans")
         return None
+    if kind == "ui":
+        return str(action.get("name", ""))
     if kind == "key":
         value = str(action.get("value", ""))
         return ord(value[0]) if value else None
@@ -585,6 +642,29 @@ def _choose_member(
     return None if index is None else candidates[index]
 
 
+def _add_workspace_member(
+    window: Any,
+    styles: dict[str, int],
+    unicode_ok: bool,
+    database: Path,
+    members: list[str],
+    state: ViewState,
+) -> MapSnapshot | None:
+    """Ask for another engagement file and return the combined snapshot."""
+    candidates = _workspace_candidates(database, members)
+    if not candidates:
+        state.notify("no other engagement to add")
+        return None
+    picked = _choose_member(window, styles, unicode_ok, candidates)
+    if picked is None:
+        return None
+    members.append(picked)
+    snapshot = _workspace_or_file(database, members)
+    shared = workspace.shared_address_count(snapshot)
+    state.notify(f"workspace: {len(members) + 1} engagements, {shared} shared")
+    return snapshot
+
+
 def _run_event_loop(ctx: UiContext, watcher: MapSnapshotWatcher) -> Path | None:
     window, database = ctx.window, ctx.database
     styles, unicode_ok = ctx.styles, ctx.unicode_ok
@@ -623,6 +703,7 @@ def _run_event_loop(ctx: UiContext, watcher: MapSnapshotWatcher) -> Path | None:
         updated = watcher.take_latest()
         if updated is not None:
             snapshot = _workspace_or_file(database, members) if members else updated
+            _refresh_path(state, snapshot)
             state.pulse_counter += 1
             _clamp_selection(state, snapshot)
             dirty = True
@@ -630,6 +711,12 @@ def _run_event_loop(ctx: UiContext, watcher: MapSnapshotWatcher) -> Path | None:
             continue
         if key == curses.KEY_MOUSE:
             key = _mouse_key(window, state, snapshot, layout)
+            if isinstance(key, str):
+                if _ui_action(state, snapshot, key):
+                    watcher.reload_now()
+                _refresh_path(state, snapshot)
+                dirty = True
+                continue
             if key is None:
                 dirty = True
                 _clamp_selection(state, snapshot)
@@ -674,19 +761,11 @@ def _run_event_loop(ctx: UiContext, watcher: MapSnapshotWatcher) -> Path | None:
             state.notify("enumeration settings")
             dirty = True
         elif key == ord("w"):
-            candidates = _workspace_candidates(database, members)
-            if not candidates:
-                state.notify("no other engagement to add")
-            else:
-                picked = _choose_member(window, styles, unicode_ok, candidates)
-                if picked is not None:
-                    members.append(picked)
-                    snapshot = _workspace_or_file(database, members)
-                    _clamp_selection(state, snapshot)
-                    shared = workspace.shared_address_count(snapshot)
-                    state.notify(
-                        f"workspace: {len(members) + 1} engagements, {shared} shared"
-                    )
+            added = _add_workspace_member(window, styles, unicode_ok, database, members, state)
+            if added is not None:
+                snapshot = added
+                _clamp_selection(state, snapshot)
+                _refresh_path(state, snapshot)
             dirty = True
         elif key == ord("a"):
             state.animation = not state.animation

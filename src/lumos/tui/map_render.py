@@ -34,6 +34,7 @@ _KIND_GLYPHS = {
     "zone": ("Z", "▧"),
 }
 
+PATH_MARKER = "▶ "
 _EDGE_GLYPHS = {
     "local": ("=", "━"),
     "observed": ("-", "─"),
@@ -42,6 +43,7 @@ _EDGE_GLYPHS = {
     "weak": (".", "╌"),
     "manual": ("#", "╳"),
     "shared": ("=", "═"),
+    "path": ("*", "●"),
 }
 
 # Overlap precedence: a measurement always wins over a guess.
@@ -212,6 +214,8 @@ def draw_map_panel(
                 canvas = BrailleCanvas(iw, ih)
                 layers[style_name] = canvas
             pattern = "observed" if state.animation else style_name
+            if edge.id in getattr(state, "path_edges", frozenset()):
+                style_name = "path"
             canvas.draw_line((start[0] * 2 + 1, start[1] * 4 + 2),
                              (end[0] * 2 + 1, end[1] * 4 + 2), style=pattern)
         runs = _braille_runs(layers, iw, ih)
@@ -227,7 +231,9 @@ def draw_map_panel(
             style_name = edge_class(edge)
             grid = grids.setdefault(style_name, [[" " for _ in range(iw)] for _ in range(ih)])
             solid = ("-", "─") if state.animation else _EDGE_GLYPHS.get(style_name, ("-", "─"))
-            _raster_line(grid, start, end, solid[0])
+            if edge.id in getattr(state, "path_edges", frozenset()):
+                style_name = "path"
+            _raster_line(grid, start, end, _EDGE_GLYPHS.get(style_name, solid)[0])
         runs = _ascii_runs(grids, iw, ih)
 
     for row, row_runs in enumerate(runs):
@@ -269,6 +275,8 @@ def draw_map_panel(
         if node.kind == "zone" and node.member_count:
             separator = " · " if unicode_ok else " * "
             label = f"{node.label}{separator}{node.member_count}"
+        elif getattr(state, "path_nodes", frozenset()) and node.id in state.path_nodes:
+            label = f"{PATH_MARKER}{node.label}"
         elif getattr(node, "duplicate_count", 1) > 1:
             label = f"{node.label} ×{node.duplicate_count}"
         else:
@@ -325,6 +333,7 @@ _FLOW_DIM_TYPES = frozenset({"inferred", "local"})
 #   red    = weak inference / unknown hop
 #   cyan   = local interface
 _LINK_TOKENS = {
+    "path": "brand",
     "observed": "ok",
     "local": "accent",
     "alternate": "accent",
@@ -421,17 +430,68 @@ def _wrap_ports(ports: Iterable[str], width: int) -> list[str]:
     return out
 
 
+def _draw_button(
+    window: Any,
+    styles: dict[str, int],
+    unicode_ok: bool,
+    row: int,
+    left: int,
+    width: int,
+    label: str,
+    action: str,
+    style: str,
+) -> None:
+    """One clickable action line in the sidebar."""
+    safe_addstr(window, row, left, clip(label, width, unicode_ok=unicode_ok), width,
+                _attr(styles, style), unicode_ok=unicode_ok)
+    mouse.add(row, left, 1, min(width, len(label)), {"kind": "ui", "name": action})
+
+
+def _draw_path_buttons(
+    window: Any,
+    styles: dict[str, int],
+    unicode_ok: bool,
+    state: Any,
+    rect: tuple[int, int, int, int],
+) -> None:
+    """Start / end / clear, plus the hop count once a path exists.
+
+    Buttons sit at the bottom so they never collide with the fields above, and
+    every one of them is a real hotspot - the keyboard equivalents still work.
+    """
+    itop, ileft, ih, iw = rect
+    if ih < 8 or iw < 14:
+        return
+    hops = getattr(state, "path_hops", 0)
+    rows = [
+        ("PATH", None, "muted"),
+        ("[ set start ]", "path_start", "brand"),
+        ("[ set end ]", "path_end", "brand"),
+        (f"[ clear path ]  {hops} hop(s)" if hops else "[ clear path ]", "path_clear", "muted"),
+        ("[ collapse all ]", "collapse_all", "accent"),
+    ]
+    row = max(ih - len(rows) - 1, 2)
+    for label, action, style in rows:
+        if row >= ih:
+            break
+        if action is None:
+            safe_addstr(window, itop + row, ileft, label, iw,
+                        _attr(styles, style), unicode_ok=unicode_ok)
+        else:
+            _draw_button(window, styles, unicode_ok, itop + row, ileft, iw, label, action, style)
+        row += 1
+
+
 def draw_sidebar(
     window: Any,
     snapshot: MapSnapshot,
     state: Any,
     styles: dict[str, int],
     unicode_ok: bool,
-    top: int,
-    left: int,
-    height: int,
-    width: int,
+    rect: tuple[int, int, int, int],
 ) -> None:
+    """Draw the selection panel; ``rect`` is (top, left, height, width)."""
+    top, left, height, width = rect
     title = "SELECTED"
     if state.selected_kind == "edge":
         title = "EDGE"
@@ -533,7 +593,13 @@ def draw_sidebar(
     if node.kind == "zone":
         field(row, "members", str(node.member_count))
         expanded = bool(snapshot.expanded_zone) and snapshot.expanded_zone == node.zone_id
-        line(row + 2, "O collapse" if expanded else "o expand members", "accent")
+        hint_row = row + 2
+        if 0 <= hint_row < ih:
+            label = "[ collapse members ]" if expanded else "[ expand members ]"
+            _draw_button(window, styles, unicode_ok, itop + hint_row, ileft, iw, label,
+                         "zone_toggle", "accent" if expanded else "brand")
+        line(row + 3, "O collapses every hub", "muted")
+        _draw_path_buttons(window, styles, unicode_ok, state, (itop, ileft, ih, iw))
         return
     line(row + 1, f"OPEN PORTS  {node.open_ports}", "muted")
     draw_meter(window, itop + row + 2, ileft, iw, min(1.0, node.open_ports / 20.0), styles,
@@ -551,3 +617,4 @@ def draw_sidebar(
     field(row + 2, "depth", str(node.distance))
     if node.ttl_hops is not None:
         field(row + 3, "about", f"{node.ttl_hops} hop(s) by TTL")
+    _draw_path_buttons(window, styles, unicode_ok, state, (itop, ileft, ih, iw))

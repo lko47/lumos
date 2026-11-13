@@ -85,7 +85,7 @@ class LoadTests(unittest.TestCase):
     def test_two_files_are_combined_and_bounded(self) -> None:
         first = snapshot("site-a", [node("d", "10.0.0.5", addresses=("10.0.0.5",))],
                          [edge("e", "d", "d")])
-        second = snapshot("site-b", [node("d", "10.0.0.9", addresses=("10.0.0.9",))])
+        second = snapshot("site-b", [node("d", "192.0.2.9", addresses=("192.0.2.9",))])
         with mock.patch.object(workspace, "load_map_snapshot", side_effect=[first, second]):
             combined = workspace.load_workspace_snapshot(["a.sqlite", "b.sqlite"])
         self.assertEqual(len(combined.nodes), 2)

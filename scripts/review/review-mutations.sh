@@ -2,7 +2,7 @@
 # Mutation checks: each mutation is applied in isolation, the full suite is run,
 # and the result is recorded. The worktree is restored between mutations.
 set -u
-cd /home/user/.hermes/cache/scratch/lumos-review || exit 1
+cd ${TMPDIR:-/tmp}/lumos-review || exit 1
 run_suite() { PYTHONPATH=src python3.11 -m unittest discover -s tests 2>&1; }
 
 mutation() {

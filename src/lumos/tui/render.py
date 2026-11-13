@@ -57,6 +57,11 @@ class ViewState:
     show_inferred: bool = True
     pending: tuple[str, str] | None = None
     expanded_zone: str = ""
+    path_start: str = ""
+    path_end: str = ""
+    path_nodes: frozenset[str] = frozenset()
+    path_edges: frozenset[str] = frozenset()
+    path_hops: int = 0
     drag_origin: tuple[int, int] | None = None
     drag_distance: int = 0
     # Animation: a pure function of `now`, plus the events that drive it.
@@ -249,7 +254,7 @@ def draw_map_screen(
     _projected, region = draw_map_panel(window, snapshot, state, styles, unicode_ok,
                                         2, 0, height - 4, map_width)
     draw_sidebar(window, snapshot, state, styles, unicode_ok,
-                 2, map_width, height - 4, sidebar)
+                 (2, map_width, height - 4, sidebar))
     return FrameLayout(tab_ranges(), region)
 
 
@@ -409,5 +414,6 @@ def draw_map(
         sidebar = max(24, min(38, width // 3))
         map_width = max(10, width - sidebar - 1)
         draw_map_panel(window, snapshot, state, colors, unicode_ok, 2, 0, height - 4, map_width)
-        draw_sidebar(window, snapshot, state, colors, unicode_ok, 2, map_width, height - 4, sidebar)
+        draw_sidebar(window, snapshot, state, colors, unicode_ok,
+                     (2, map_width, height - 4, sidebar))
     window.refresh()
