@@ -38,6 +38,7 @@ class MapNode:
     zone_id: str = ""
     ttl_hops: int | None = None
     duplicate_count: int = 1
+    source_tag: str = ""
 
 
 def ttl_hops(reason_ttl: int | None) -> int | None:
@@ -70,6 +71,8 @@ class MapEdge:
     rule: str = ""
     derived: bool = False
     evidence: dict = field(default_factory=dict)
+    source_tag: str = ""
+    bridge: bool = False
 
 
 EDGE_CLASSES = ("local", "observed", "alternate", "likely", "weak", "manual")
@@ -190,6 +193,7 @@ class MapSnapshot:
     root_interfaces: tuple[str, ...] = ()
     not_shown: int = 0
     expanded_zone: str = ""
+    members: tuple[tuple[str, str], ...] = ()
 
 
 def load_map_snapshot(

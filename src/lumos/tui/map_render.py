@@ -41,6 +41,7 @@ _EDGE_GLYPHS = {
     "likely": (":", "┄"),
     "weak": (".", "╌"),
     "manual": ("#", "╳"),
+    "shared": ("=", "═"),
 }
 
 # Overlap precedence: a measurement always wins over a guess.
@@ -309,6 +310,10 @@ def draw_map_panel(
 # so its dot is bright.  An inferred or local link is a reachability claim, not
 # a path: its dot is dim, and the help says so.  Manual and imported links are
 # not observations at all and never move.
+# A shared-address link between two engagement files is neither observed nor
+# inferred: it says the same address appeared from two vantages.
+_EDGE_GLYPHS.setdefault("shared", ("=", "═"))
+
 _FLOW_BRIGHT_TYPES = frozenset({"traceroute", "observed"})
 _FLOW_DIM_TYPES = frozenset({"inferred", "local"})
 

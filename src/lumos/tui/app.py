@@ -18,6 +18,7 @@ from ..core.decisions import DecisionError, record_decision
 from ..core.text import sanitize_text
 from ..services import actions
 from ..services.map_view import MapSnapshot, MapSnapshotWatcher, load_map_snapshot, render_plain_snapshot
+from ..services import workspace
 from . import theme
 from . import flows
 from . import animation
@@ -172,6 +173,7 @@ class UiContext:
     capability: str
     unicode_ok: bool
     activity: actions.ActivityLog
+    workspace: tuple[str, ...] = ()
 
 
 # Keys that open a writable flow; the value is the actions.py command name.
@@ -508,7 +510,7 @@ def _pick_command(
         window.timeout(1000)
 
 
-def _run_curses(window: Any, database: Path) -> None:
+def _run_curses(window: Any, database: Path, workspace_paths: tuple[str, ...] = ()) -> None:
     window.keypad(True)
     mouse.enable(window)
     try:
@@ -528,13 +530,15 @@ def _run_curses(window: Any, database: Path) -> None:
     window.timeout(1000)
     activity = actions.ActivityLog()
     activity.add("info", f"opened {Path(database).name}")
+    extra_members: tuple[str, ...] = tuple(workspace_paths)
     path = Path(database)
     while True:
         watcher = MapSnapshotWatcher(path, interval=1.0)
         watcher.start()
         try:
             context = UiContext(
-                window, path, styles, theme_name, capability, unicode_ok, activity
+                window, path, styles, theme_name, capability, unicode_ok, activity,
+                tuple(extra_members),
             )
             switched = _run_event_loop(context, watcher)
         finally:
@@ -547,15 +551,42 @@ def _run_curses(window: Any, database: Path) -> None:
         window.timeout(1000)
 
 
+def _workspace_or_file(database: Path, members: list[str]) -> MapSnapshot:
+    """One file, or the workspace view when other engagements were added."""
+    if not members:
+        return load_map_snapshot(database)
+    return workspace.load_workspace_snapshot([str(database), *members])
+
+
+def _pick_workspace_member(
+    window: Any, styles: dict[str, int], unicode_ok: bool, database: Path, members: list[str]
+) -> str | None:
+    """Choose another engagement file to add; the file itself is only read."""
+    candidates = []
+    for entry in actions.recent_engagements():
+        path = str(entry.get("path") or "")
+        if not path or path == str(database) or path in members:
+            continue
+        candidates.append(path)
+    if not candidates:
+        return None
+    labels = [f"{Path(path).stem}   {path}" for path in candidates]
+    index = forms.choose(
+        window, styles, unicode_ok, "add engagement to workspace", labels,
+        note="files stay untouched; shared addresses link the clusters",
+    )
+    return None if index is None else candidates[index]
+
+
 def _run_event_loop(ctx: UiContext, watcher: MapSnapshotWatcher) -> Path | None:
     window, database = ctx.window, ctx.database
     styles, unicode_ok = ctx.styles, ctx.unicode_ok
     theme_name, capability = ctx.theme_name, ctx.capability
-    snapshot = watcher.prime()
-    if snapshot is None:
-        if watcher.error is not None:
-            raise watcher.error
-        snapshot = load_map_snapshot(database)
+    members: list[str] = [path for path in ctx.workspace if path != str(database)]
+    snapshot = _workspace_or_file(database, members)
+    primed = watcher.prime()
+    if primed is None and watcher.error is not None:
+        raise watcher.error
     state = ViewState()
     _clamp_selection(state, snapshot)
     dirty = True
@@ -584,7 +615,7 @@ def _run_event_loop(ctx: UiContext, watcher: MapSnapshotWatcher) -> Path | None:
         key = window.getch()
         updated = watcher.take_latest()
         if updated is not None:
-            snapshot = updated
+            snapshot = _workspace_or_file(database, members) if members else updated
             state.pulse_counter += 1
             _clamp_selection(state, snapshot)
             dirty = True
@@ -628,6 +659,14 @@ def _run_event_loop(ctx: UiContext, watcher: MapSnapshotWatcher) -> Path | None:
                 state.selected_kind = "node"
                 state.selected = found
                 _set_view(state, "map")
+            dirty = True
+        elif key == ord("w"):
+            picked = _pick_workspace_member(window, styles, unicode_ok, database, members)
+            if picked is not None:
+                members.append(picked)
+                snapshot = _workspace_or_file(database, members)
+                _clamp_selection(state, snapshot)
+                state.notify(f"workspace: {len(members) + 1} engagements")
             dirty = True
         elif key == ord("a"):
             state.animation = not state.animation
@@ -815,7 +854,7 @@ def run_app_on_window(window: Any, database: str | Path) -> None:
     _run_curses(window, Path(database))
 
 
-def run_tui(database: str | Path) -> int:
+def run_tui(database: str | Path, workspace: tuple[str, ...] = ()) -> int:
     """Open curses on a TTY; otherwise render the same snapshot as plain CLI text."""
     path = Path(database)
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
@@ -829,7 +868,7 @@ def run_tui(database: str | Path) -> int:
     try:
         signal.signal(signal.SIGTERM, terminate)
         try:
-            curses.wrapper(_run_curses, path)
+            curses.wrapper(_run_curses, path, tuple(workspace))
         except KeyboardInterrupt:
             return 130
         except curses.error as exc:
