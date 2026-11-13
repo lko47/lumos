@@ -56,6 +56,8 @@ class ViewState:
     show_inferred: bool = True
     pending: tuple[str, str] | None = None
     expanded_zone: str = ""
+    drag_origin: tuple[int, int] | None = None
+    drag_distance: int = 0
 
     def notify(self, text: str, seconds: float = 4.0) -> None:
         self.message = sanitize_text(text, max_chars=160)
@@ -96,7 +98,7 @@ HINTS = (
     ("/", "search", "/"),
     ("t", "theme", "t"),
     ("+/-", "zoom", "+"),
-    ("HJKL", "pan", "j"),
+    ("arrows/drag", "pan", "H"),
     ("0", "reset", "0"),
     ("o/O", "hub", "o"),
     ("N", "new", "N"),

@@ -54,8 +54,10 @@ def draw_help(window: Any, styles: dict[str, int], unicode_ok: bool) -> None:
             ),
             (
                 ("Display", (
-                    ("+ / -", "zoom in / out"),
+                    ("+ / -", "zoom in / out (wheel zooms at the pointer)"),
                     ("H J K L", "pan the map"),
+                    ("arrows", "pan the map"),
+                    ("drag", "pan the map with the mouse"),
                     ("0", "reset viewport"),
                     ("t", "next colour theme"),
                 )),

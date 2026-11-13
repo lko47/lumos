@@ -102,6 +102,22 @@ def _clamp_selection(state: ViewState, snapshot: MapSnapshot) -> None:
     state.selected = max(0, min(state.selected, max(0, count - 1)))
 
 
+def _pan_with_arrow(window: Any, state: ViewState, key: int) -> None:
+    """Arrow keys move the map window; j/k/h/l keep moving the selection."""
+    height, width = window.getmaxyx()
+    step_x = max(4, width // 10)
+    step_y = max(2, height // 10)
+    if key == curses.KEY_LEFT:
+        dx, dy = -step_x, 0
+    elif key == curses.KEY_RIGHT:
+        dx, dy = step_x, 0
+    elif key == curses.KEY_UP:
+        dx, dy = 0, -step_y
+    else:
+        dx, dy = 0, step_y
+    state.viewport = state.viewport.pan(dx, dy, width, height)
+
+
 def _move_selection(state: ViewState, snapshot: MapSnapshot, delta: int) -> None:
     if state.view == "scans":
         state.scan_selected = max(0, min(state.scan_selected + delta, max(0, len(snapshot.scans_detail) - 1)))
@@ -143,18 +159,98 @@ def _search(snapshot: MapSnapshot, query: str) -> int | None:
     return None
 
 
-def _mouse_key(window: Any, state: ViewState, snapshot: MapSnapshot) -> int | None:
+def _mouse_key(
+    window: Any,
+    state: ViewState,
+    snapshot: MapSnapshot,
+    layout: "FrameLayout | None" = None,
+) -> int | None:
     """Turn a mouse report into state changes or a synthetic key press.
 
     Returns a key code when the click should replay a keyboard shortcut, or
-    ``None`` when the click was applied directly (tabs, list rows, map nodes).
+    ``None`` when the report was applied directly (drag pan, zoom, tabs, rows).
     """
     event = mouse.read(window)
     if event is None:
         return None
+    if event.kind in {"press", "drag", "move", "release"}:
+        released = _drag(window, state, event)
+        # A press and release without movement is still a click; some
+        # terminals report the phases separately instead of BUTTON1_CLICKED.
+        return _click(state, released) if released is not None else None
     if event.kind == "scroll":
-        _scroll(state, snapshot, event.direction)
+        _zoom_with_wheel(state, layout, event)
         return None
+    if event.kind != "click":
+        return None
+    return _click(state, event)
+
+
+def _drag(
+    window: Any, state: ViewState, event: "mouse.MouseEvent"
+) -> "mouse.MouseEvent | None":
+    """Press-drag-release pans the map; a drag never counts as a click.
+
+    Returns the release event when the pointer barely moved, so the caller can
+    treat it as a click.
+    """
+    if event.kind == "press":
+        state.drag_origin = (event.x, event.y)
+        state.drag_distance = 0
+        mouse.watch_motion()
+        return None
+    if event.kind == "release":
+        mouse.stop_motion()
+        origin = state.drag_origin
+        state.drag_origin = None
+        if origin is None:
+            return None
+        dx, dy = event.x - origin[0], event.y - origin[1]
+        if abs(dx) + abs(dy) <= 2:
+            return event  # a click, not a drag
+        if state.drag_distance == 0:
+            # Terminals that report only press and release still get a drag.
+            height, width = window.getmaxyx()
+            state.viewport = state.viewport.pan(dx, dy, width, height)
+        return None
+    # "move" arrives when the terminal reports motion without the button bit;
+    # while a drag is open it means the same thing as "drag".
+    if state.drag_origin is None:
+        return None
+    last_x, last_y = state.drag_origin
+    dx, dy = event.x - last_x, event.y - last_y
+    if not (dx or dy):
+        return None
+    height, width = window.getmaxyx()
+    state.viewport = state.viewport.pan(dx, dy, width, height)
+    state.drag_origin = (event.x, event.y)
+    state.drag_distance += abs(dx) + abs(dy)
+    return None
+
+
+def _zoom_with_wheel(
+    state: ViewState, layout: "FrameLayout | None", event: "mouse.MouseEvent"
+) -> None:
+    """Wheel zooms around the pointer when it is over the map, else the centre."""
+    direction = 1 if event.direction < 0 else -1
+    region = layout.map_region if layout is not None else None
+    if state.view != "map" or region is None:
+        state.viewport = (
+            state.viewport.zoom_in() if direction > 0 else state.viewport.zoom_out()
+        )
+        return
+    itop, ileft, ih, iw = region
+    ax, ay = event.x - ileft - 1, event.y - itop - 1
+    if not (0 <= ax < iw and 0 <= ay < ih):
+        state.viewport = (
+            state.viewport.zoom_in() if direction > 0 else state.viewport.zoom_out()
+        )
+        return
+    state.viewport = state.viewport.zoom_at(ax, ay, iw, ih, direction)
+
+
+def _click(state: ViewState, event: "mouse.MouseEvent") -> int | None:
+    """Apply the hotspot under a click; returns a key to replay when relevant."""
     action = mouse.hit(event.y, event.x)
     if not action:
         return None
@@ -177,18 +273,6 @@ def _mouse_key(window: Any, state: ViewState, snapshot: MapSnapshot) -> int | No
         value = str(action.get("value", ""))
         return ord(value[0]) if value else None
     return None
-
-
-def _scroll(state: ViewState, snapshot: MapSnapshot, direction: int) -> None:
-    """Wheel up zooms the map in, wheel down out; lists move their selection."""
-    if state.view == "map":
-        state.viewport = (
-            state.viewport.zoom_in() if direction < 0 else state.viewport.zoom_out()
-        )
-    elif state.view == "hosts":
-        _move_selection(state, snapshot, direction)
-    else:
-        state.scan_selected = max(0, state.scan_selected + direction)
 
 
 def _draw_frame(
@@ -385,6 +469,7 @@ def _run_event_loop(
     state = ViewState()
     _clamp_selection(state, snapshot)
     dirty = True
+    layout: FrameLayout | None = None
     while True:
         # Modals repaint this frame behind themselves instead of blanking a
         # rectangle, so an open dialog never leaves holes in the map.
@@ -393,7 +478,7 @@ def _run_event_loop(
             lambda: _draw_frame(window, snapshot, state, styles, unicode_ok, theme_name, capability),
         )
         if dirty:
-            _draw_frame(window, snapshot, state, styles, unicode_ok, theme_name, capability)
+            layout = _draw_frame(window, snapshot, state, styles, unicode_ok, theme_name, capability)
             dirty = False
         # Animate only while something is actually moving, and poll quickly
         # while the watcher is rebuilding a snapshot the UI asked for.
@@ -411,7 +496,7 @@ def _run_event_loop(
         if key == -1:
             continue
         if key == curses.KEY_MOUSE:
-            key = _mouse_key(window, state, snapshot)
+            key = _mouse_key(window, state, snapshot, layout)
             if key is None:
                 dirty = True
                 _clamp_selection(state, snapshot)
@@ -488,6 +573,8 @@ def _run_event_loop(
             _select_root(state, snapshot)
         elif key in (ord("g"), ord("G")):
             _jump_selection(state, snapshot, last=key == ord("G"))
+        elif key in (curses.KEY_UP, curses.KEY_DOWN, curses.KEY_LEFT, curses.KEY_RIGHT) and state.view == "map":
+            _pan_with_arrow(window, state, key)
         elif key in (curses.KEY_UP, curses.KEY_LEFT, ord("k"), ord("j")):
             _move_selection(state, snapshot, -1 if key in (curses.KEY_UP, curses.KEY_LEFT, ord("k")) else 1)
         elif key in (curses.KEY_DOWN, curses.KEY_RIGHT, ord("l")):

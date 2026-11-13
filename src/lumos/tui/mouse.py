@@ -99,27 +99,65 @@ def hit(y: int, x: int) -> dict[str, Any] | None:
 
 
 def enable(window: Any) -> bool:
-    """Turn on button and wheel reporting; returns False when unsupported."""
+    """Turn on button and wheel reporting; returns False when unsupported.
+
+    Motion is deliberately off: hover reports flood the input queue and can
+    overwrite the press that starts a drag. It is switched on only while a
+    drag is open, by :func:`watch_motion`.
+    """
     import curses
 
     try:
-        curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
+        curses.mousemask(curses.ALL_MOUSE_EVENTS)
         window.keypad(True)
     except curses.error:
         return False
     return True
 
 
-def decode(state: int, x: int, y: int) -> MouseEvent | None:
-    """Translate a ``curses`` mouse state into a click or a scroll."""
+def watch_motion() -> None:
+    """Report pointer motion too: used between a drag's press and release."""
     import curses
 
-    if state & curses.BUTTON1_CLICKED or state & curses.BUTTON1_PRESSED:
+    try:
+        curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
+    except curses.error:
+        pass
+
+
+def stop_motion() -> None:
+    """Back to buttons and wheel only, so hover does not flood the queue."""
+    import curses
+
+    try:
+        curses.mousemask(curses.ALL_MOUSE_EVENTS)
+    except curses.error:
+        pass
+
+
+def decode(state: int, x: int, y: int) -> MouseEvent | None:
+    """Translate a ``curses`` mouse state into one of five event kinds.
+
+    ``click`` is a press and release in place, ``press``/``drag``/``release``
+    are the phases of a button drag (used to pan the map), and ``scroll`` is
+    the wheel.
+    """
+    import curses
+
+    if state & curses.BUTTON1_CLICKED:
         return MouseEvent("click", y, x)
+    if state & curses.BUTTON1_RELEASED:
+        return MouseEvent("release", y, x)
+    if state & curses.REPORT_MOUSE_POSITION and state & curses.BUTTON1_PRESSED:
+        return MouseEvent("drag", y, x)
+    if state & curses.BUTTON1_PRESSED:
+        return MouseEvent("press", y, x)
     if state & curses.BUTTON4_PRESSED:
         return MouseEvent("scroll", y, x, -1)
     if state & curses.BUTTON5_PRESSED:
         return MouseEvent("scroll", y, x, 1)
+    if state & curses.REPORT_MOUSE_POSITION:
+        return MouseEvent("move", y, x)
     return None
 
 

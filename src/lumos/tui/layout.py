@@ -104,7 +104,7 @@ def compute_layout(
     return positions
 
 
-ZOOM_LEVELS = (1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0)
+ZOOM_LEVELS = (1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0, 6.0, 8.0)
 
 
 @dataclass(frozen=True)
@@ -142,17 +142,52 @@ class Viewport:
             pan_y=max(-limit_y, min(limit_y, self.pan_y + dy)),
         )
 
+    def _level_index(self) -> int:
+        if self.zoom in ZOOM_LEVELS:
+            return ZOOM_LEVELS.index(self.zoom)
+        return min(range(len(ZOOM_LEVELS)), key=lambda index: abs(ZOOM_LEVELS[index] - self.zoom))
+
     def zoom_in(self) -> "Viewport":
-        index = ZOOM_LEVELS.index(self.zoom) if self.zoom in ZOOM_LEVELS else 0
-        return replace(self, zoom=ZOOM_LEVELS[min(index + 1, len(ZOOM_LEVELS) - 1)])
+        return replace(self, zoom=ZOOM_LEVELS[min(self._level_index() + 1, len(ZOOM_LEVELS) - 1)])
 
     def zoom_out(self) -> "Viewport":
-        index = ZOOM_LEVELS.index(self.zoom) if self.zoom in ZOOM_LEVELS else 0
-        return replace(self, zoom=ZOOM_LEVELS[max(index - 1, 0)])
+        return replace(self, zoom=ZOOM_LEVELS[max(self._level_index() - 1, 0)])
+
+    def zoom_to(
+        self,
+        level: float,
+        width: int,
+        height: int,
+        anchor: Point | None = None,
+    ) -> "Viewport":
+        """Zoom to ``level`` keeping the world point under ``anchor`` still.
+
+        ``anchor`` is panel-local; the default is the panel centre, which is
+        what the keyboard zoom keys use. Pan is recomputed so the anchor does
+        not drift, which is what makes wheel-zoom at the cursor feel stable.
+        """
+        ax, ay = anchor if anchor is not None else (width / 2.0, height / 2.0)
+        world_x, world_y = self.unproject((round(ax), round(ay)), width, height)
+        cx, cy = width / 2.0, height / 2.0
+        return replace(
+            self,
+            zoom=level,
+            pan_x=round(ax - cx - (world_x - cx) * level),
+            pan_y=round(ay - cy - (world_y - cy) * level),
+        )
+
+    def zoom_at(self, x: int, y: int, width: int, height: int, direction: int) -> "Viewport":
+        """Zoom one level in (``direction`` > 0) or out, anchored at ``x, y``."""
+        index = self._level_index()
+        step = 1 if direction > 0 else -1
+        level = ZOOM_LEVELS[max(0, min(len(ZOOM_LEVELS) - 1, index + step))]
+        return self.zoom_to(level, width, height, (x, y))
 
     def reset(self) -> "Viewport":
         return Viewport()
 
     @property
     def label(self) -> str:
+        if self.pan_x or self.pan_y:
+            return f"zoom {self.zoom:.2f}x pan {self.pan_x:+d},{self.pan_y:+d}"
         return f"zoom {self.zoom:.2f}x"
