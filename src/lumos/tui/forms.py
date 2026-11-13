@@ -610,3 +610,108 @@ def confirm_scope(
                 return True
             shown = "prime the checkbox first"
             continue
+
+
+def _draw_engine_row(
+    window: Any,
+    styles: dict[str, int],
+    unicode_ok: bool,
+    position: tuple[int, int],
+    width: int,
+    engine_row: Any,
+    selected: bool,
+) -> None:
+    """One engine line: selection marker, checkbox, name, where it lives."""
+    row, left = position
+    marker = "› " if selected and unicode_ok else "> " if selected else "  "
+    box = "[x]" if getattr(engine_row, "enabled", False) else "[ ]"
+    name = str(getattr(engine_row, "name", "?"))
+    if getattr(engine_row, "installed", False):
+        detail = str(getattr(engine_row, "path", "") or "")
+        attr_key = "accent" if selected else "text"
+    else:
+        detail = "not installed"
+        attr_key = "muted"
+    safe_addstr(
+        window, row, left, f"{marker}{box} {name:<9} {detail}", width,
+        _attr(styles, attr_key), unicode_ok=unicode_ok,
+    )
+
+
+def engine_settings(
+    window: Any,
+    styles: dict[str, int],
+    unicode_ok: bool,
+    rows: Sequence[Any],
+    *,
+    toggle: Callable[[str], Sequence[Any]] | None = None,
+) -> None:
+    """Checkbox list of enumeration engines; space toggles, Escape closes.
+
+    ``rows`` are ``engines.EngineStatus``-shaped objects. The modal only draws
+    and dispatches, so it can be tested without a settings file, and an absent
+    binary is shown as "not installed" rather than silently skipped.
+    """
+    current = list(rows)
+    index = 0
+    window.timeout(-1)
+    try:
+        while True:
+            if _too_small(window, styles, unicode_ok):
+                return
+            height, width = window.getmaxyx()
+            box_height = min(len(current) + 5, max(9, height - 2))
+            box_width = min(78, max(30, width - 2))
+            top = max(0, (height - box_height) // 2)
+            left = max(0, (width - box_width) // 2)
+            clear_overlays(window)
+            top, left, box_height, box_width = _clamp(
+                height, width, top, left, box_height, box_width
+            )
+            remember_overlay(window, (top, left, box_height, box_width))
+            itop, ileft, ih, iw = draw_box(
+                window, top, left, box_height, box_width,
+                title=" enumeration ",
+                border_attr=_attr(styles, "border_focus"),
+                title_attr=_attr(styles, "brand"),
+                unicode_ok=unicode_ok, focused=True,
+            )
+            safe_addstr(
+                window, itop, ileft, "Installed commands to enumerate with:", iw,
+                _attr(styles, "muted"), unicode_ok=unicode_ok,
+            )
+            row_y = itop + 1
+            for position, engine_row in enumerate(current):
+                if row_y >= itop + ih - 2:
+                    break
+                _draw_engine_row(
+                    window, styles, unicode_ok, (row_y, ileft), iw, engine_row,
+                    position == index,
+                )
+                mouse.add(row_y, ileft, 1, iw, {"kind": "engine", "index": position})
+                row_y += 1
+            safe_addstr(
+                window, itop + ih - 1, ileft, "Space toggle   Esc close", iw,
+                _attr(styles, "muted"), unicode_ok=unicode_ok,
+            )
+            window.refresh()
+            key = window.getch()
+            if mouse.is_mouse(key):
+                _event, action = mouse.read_action(window)
+                kind = str((action or {}).get("kind", ""))
+                if kind == "engine":
+                    index = min(int((action or {}).get("index", 0)), max(0, len(current) - 1))
+                if kind in {"engine", "key"} and toggle is not None and current:
+                    current = list(toggle(current[index].name)) or current
+                continue
+            if key in (27, ord("q")):
+                return
+            if key in (curses.KEY_UP, ord("k")):
+                index = (index - 1) % max(1, len(current))
+            elif key in (curses.KEY_DOWN, ord("j")):
+                index = (index + 1) % max(1, len(current))
+            elif key in (ord(" "), 10, 13, curses.KEY_ENTER):
+                if toggle is not None and current:
+                    current = list(toggle(current[index].name)) or current
+    finally:
+        window.timeout(1000)

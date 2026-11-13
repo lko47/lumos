@@ -21,7 +21,7 @@ flowchart LR
     P3 -->|"4 imports"| P2
     P4 -->|"16 imports"| P2
     P4 -->|"2 imports"| P3
-    P5 -->|"9 imports"| P2
+    P5 -->|"11 imports"| P2
     P5 -->|"11 imports"| P4
 ```
 
@@ -76,6 +76,7 @@ flowchart LR
 | `lumos.services.map_view` | `lumos.core.text` |
 | `lumos.tui.app` | `lumos.core` |
 | `lumos.tui.app` | `lumos.core.decisions` |
+| `lumos.tui.app` | `lumos.core.engines` |
 | `lumos.tui.app` | `lumos.core.state` |
 | `lumos.tui.app` | `lumos.core.text` |
 | `lumos.tui.app` | `lumos.services` |

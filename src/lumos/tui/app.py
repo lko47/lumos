@@ -19,10 +19,12 @@ from ..core.text import sanitize_text
 from ..services import actions
 from ..services.map_view import MapSnapshot, MapSnapshotWatcher, load_map_snapshot, render_plain_snapshot
 from ..services import workspace
+from ..core import engines
 from . import theme
 from . import flows
 from . import animation
 from . import mouse
+from . import forms
 from .overlays import draw_help, draw_palette
 from .widgets import set_backdrop
 from .render import (
@@ -659,6 +661,12 @@ def _run_event_loop(ctx: UiContext, watcher: MapSnapshotWatcher) -> Path | None:
                 state.selected_kind = "node"
                 state.selected = found
                 _set_view(state, "map")
+            dirty = True
+        elif key == ord(","):
+            forms.engine_settings(
+                window, styles, unicode_ok, engines.statuses(), toggle=engines.toggle
+            )
+            state.notify("enumeration settings")
             dirty = True
         elif key == ord("w"):
             picked = _pick_workspace_member(window, styles, unicode_ok, database, members)
