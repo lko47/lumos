@@ -14,7 +14,12 @@ import xml.etree.ElementTree as ET
 
 from .database import open_database, utc_now
 from .nmap.runner import redacted_argv
-from .nmap.xml_stream import MAX_XML_BYTES, NmapXmlError, parse_nmap_xml
+from .nmap.xml_stream import (
+    MAX_XML_BYTES,
+    NmapXmlError,
+    check_prolog_declarations,
+    parse_nmap_xml,
+)
 from .scan_store import ScanWriter, make_scan_context
 from .scope_store import get_network, read_scope_rules
 from .text import sanitize_text
@@ -27,7 +32,7 @@ def _local_name(tag: str) -> str:
 def _read_root_attributes(path: Path, max_bytes: int) -> dict[str, str]:
     parser = ET.XMLPullParser(events=("start",))
     total = 0
-    tail = b""
+    prolog = b""
     with path.open("rb") as stream:
         while True:
             chunk = stream.read(65536)
@@ -36,10 +41,8 @@ def _read_root_attributes(path: Path, max_bytes: int) -> dict[str, str]:
             total += len(chunk)
             if total > max_bytes:
                 raise NmapXmlError(f"Nmap XML exceeds the {max_bytes}-byte size limit")
-            probe = (tail + chunk).upper()
-            if b"<!DOCTYPE" in probe or b"<!ENTITY" in probe:
-                raise NmapXmlError("DTD or entity declaration is forbidden in Nmap XML")
-            tail = probe[-16:]
+            prolog += chunk
+            check_prolog_declarations(prolog)
             try:
                 parser.feed(chunk)
                 for _, element in parser.read_events():

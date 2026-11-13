@@ -40,6 +40,35 @@ class NmapXmlStreamTests(unittest.TestCase):
         with self.assertRaisesRegex(NmapXmlError, "DTD|entity"):
             list(parse_nmap_xml(chunks))
 
+    def test_real_nmap_doctype_and_stylesheet_preamble_is_accepted(self) -> None:
+        payload = (FIXTURE_DIR / "real-127.0.0.1.xml").read_bytes()
+        self.assertIn(b"<!DOCTYPE nmaprun>", payload)
+        self.assertIn(b"<?xml-stylesheet", payload)
+        hosts = list(parse_nmap_xml([payload]))
+        self.assertEqual(len(hosts), 1)
+        self.assertEqual([(a.kind, a.value) for a in hosts[0].addresses], [("ipv4", "127.0.0.1")])
+        self.assertIn((22, "ssh"), [(port.port, port.service) for port in hosts[0].ports])
+
+    def test_real_nmap_preamble_survives_every_chunk_boundary(self) -> None:
+        payload = (FIXTURE_DIR / "real-127.0.0.1.xml").read_bytes()
+        for size in (1, 2, 3, 7, 16, 17, 64):
+            with self.subTest(chunk=size):
+                hosts = list(parse_nmap_xml(payload[i:i + size] for i in range(0, len(payload), size)))
+                self.assertEqual(len(hosts), 1)
+
+    def test_doctype_with_a_system_identifier_is_rejected(self) -> None:
+        payload = (FIXTURE_DIR / "real-127.0.0.1.xml").read_bytes()
+        hostile = payload.replace(
+            b"<!DOCTYPE nmaprun>", b'<!DOCTYPE nmaprun SYSTEM "file:///etc/passwd">'
+        )
+        with self.assertRaisesRegex(NmapXmlError, "DOCTYPE"):
+            list(parse_nmap_xml(hostile[i:i + 9] for i in range(0, len(hostile), 9)))
+
+    def test_doctype_after_the_root_is_rejected(self) -> None:
+        payload = b'<nmaprun><host><status state="up"/></host><!DOCTYPE nmaprun></nmaprun>'
+        with self.assertRaisesRegex(NmapXmlError, "DOCTYPE"):
+            list(parse_nmap_xml([payload]))
+
     def test_truncated_document_preserves_preceding_completed_host(self) -> None:
         good = (FIXTURE_DIR / "normal.xml").read_bytes()
         first_host = good[good.index(b"  <host "):good.index(b"  </host>") + len(b"  </host>")]

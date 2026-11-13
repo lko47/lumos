@@ -54,6 +54,35 @@ class ScanningPipelineTests(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_real_nmap_fixture_scans_end_to_end(self) -> None:
+        add_scope_rule(self.db, "loop", "127.0.0.1/32", included=True, author="tester")
+        real = ROOT / "tests" / "fixtures" / "nmap" / "real-127.0.0.1.xml"
+        with patch.dict(os.environ, {"NMAP_FAKE_FIXTURE": str(real)}):
+            outcome = scan_database(
+                self.db,
+                "loop",
+                ["127.0.0.1"],
+                executable=str(FAKE),
+                operator="tester",
+            )
+        self.assertEqual(outcome.result.parse_error, "")
+        self.assertEqual(outcome.result.exit_code, 0)
+        self.assertEqual(outcome.result.hosts_seen, 1)
+        conn = open_database(self.db, readonly=True)
+        try:
+            self.assertEqual(
+                conn.execute("SELECT status FROM scans").fetchone()[0], "completed"
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM host_observations").fetchone()[0], 1
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM port_observations WHERE state = 'open'").fetchone()[0],
+                1,
+            )
+        finally:
+            conn.close()
+
     def test_keyboard_interrupt_cancels_nmap_and_keeps_completed_host(self) -> None:
         original_join = threading.Thread.join
         interrupted = False

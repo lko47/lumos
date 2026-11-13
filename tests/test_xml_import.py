@@ -49,6 +49,23 @@ class NmapXmlImportTests(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_real_nmap_xml_file_imports_end_to_end(self) -> None:
+        scan_id, hosts, error = import_nmap_xml(self.db, "lab", FIXTURES / "real-127.0.0.1.xml")
+        self.assertEqual((hosts, error), (1, ""))
+        conn = open_database(self.db, readonly=True)
+        try:
+            scan = conn.execute("SELECT status, nmap_version FROM scans WHERE id = ?", (scan_id,)).fetchone()
+            self.assertEqual(tuple(scan), ("completed", "7.993"))
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM host_observations").fetchone()[0], 1)
+            ports = {
+                (row[0], row[1])
+                for row in conn.execute("SELECT port, state FROM port_observations")
+            }
+            self.assertIn((22, "open"), ports)
+            self.assertIn((80, "closed"), ports)
+        finally:
+            conn.close()
+
     def test_truncated_import_keeps_scan_failed_and_reports_partial_status(self) -> None:
         scan_id, hosts, error = import_nmap_xml(self.db, "lab", FIXTURES / "truncated.xml")
         self.assertEqual(hosts, 0)

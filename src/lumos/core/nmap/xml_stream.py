@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Callable, Iterable, Iterator, cast
@@ -11,7 +12,14 @@ from ..text import sanitize_text
 MAX_XML_BYTES = 128 * 1024 * 1024
 MAX_XML_DEPTH = 64
 MAX_FIELD_CHARS = 4096
-_FORBIDDEN_DECLARATIONS = (b"<!DOCTYPE", b"<!ENTITY")
+# Nmap always emits exactly `<!DOCTYPE nmaprun>`; only that declaration is
+# allowed, and only before the root element. Anything else that looks like a
+# DTD (an internal subset, a system/public identifier, an entity declaration)
+# is refused, wherever it appears.
+MAX_PROLOG_BYTES = 64 * 1024
+_ALLOWED_DOCTYPE = re.compile(rb"<!DOCTYPE\s+nmaprun\s*>", re.IGNORECASE)
+_DOCTYPE_TOKEN = b"<!DOCTYPE"
+_ENTITY_TOKEN = b"<!ENTITY"
 
 
 class NmapXmlError(ValueError):
@@ -222,6 +230,35 @@ def _parse_host(element: ET.Element) -> HostRecord:
     )
 
 
+def check_prolog_declarations(prolog: bytes) -> None:
+    """Reject any prolog declaration except the bare ``<!DOCTYPE nmaprun>``.
+
+    Called with the bytes seen so far. A declaration is judged only when its
+    closing ``>`` has arrived, so a declaration split across chunk boundaries
+    is never rejected on a partial match. Anything after the root element has
+    started is not prolog and may never contain a declaration.
+    """
+    upper = prolog.upper()
+    if _ENTITY_TOKEN in upper:
+        raise NmapXmlError("DTD or entity declaration is forbidden in Nmap XML")
+    root_at = upper.find(b"<NMAPRUN")
+    prolog_bytes = prolog[:root_at] if root_at != -1 else prolog
+    if root_at != -1 and _DOCTYPE_TOKEN in upper[root_at:]:
+        raise NmapXmlError("A DOCTYPE declaration is only allowed before the root element")
+    upper = prolog_bytes.upper()
+    index = upper.find(_DOCTYPE_TOKEN)
+    while index != -1:
+        end = prolog_bytes.find(b">", index)
+        if end == -1:
+            return  # incomplete declaration; wait for more bytes
+        declaration = prolog_bytes[index:end + 1]
+        if not _ALLOWED_DOCTYPE.fullmatch(declaration):
+            raise NmapXmlError(
+                "Only the bare '<!DOCTYPE nmaprun>' declaration is accepted in Nmap XML"
+            )
+        index = upper.find(_DOCTYPE_TOKEN, end + 1)
+
+
 def parse_nmap_xml(
     chunks: Iterable[bytes],
     *,
@@ -238,20 +275,36 @@ def parse_nmap_xml(
     total = 0
     depth = 0
     tail = b""
+    prolog = b""
+    in_prolog = True
     try:
         for raw_chunk in chunks:
             chunk = raw_chunk.encode("utf-8") if isinstance(raw_chunk, str) else bytes(raw_chunk)
             total += len(chunk)
             if total > max_bytes:
                 raise NmapXmlError(f"Nmap XML exceeds the {max_bytes}-byte size limit")
-            probe = (tail + chunk).upper()
-            if any(token in probe for token in _FORBIDDEN_DECLARATIONS):
-                raise NmapXmlError("DTD or entity declaration is forbidden in Nmap XML")
-            tail = probe[-16:]
+            if in_prolog:
+                # Keep the whole prolog so a declaration split across chunk
+                # boundaries is still classified as one declaration. A
+                # declaration is only judged once its '>' has arrived.
+                prolog += chunk
+                if len(prolog) > MAX_PROLOG_BYTES:
+                    raise NmapXmlError(
+                        f"Nmap XML prolog exceeds the {MAX_PROLOG_BYTES}-byte limit"
+                    )
+                check_prolog_declarations(prolog)
+            else:
+                window = (tail + chunk).upper()
+                if _ENTITY_TOKEN in window or _DOCTYPE_TOKEN in window:
+                    raise NmapXmlError("DTD or entity declaration is forbidden in Nmap XML")
+            tail = (tail + chunk)[-16:]
             parser.feed(chunk)
             for event, element in cast(Iterable[tuple[str, ET.Element]], parser.read_events()):
                 if event == "start":
                     depth += 1
+                    if depth == 1:
+                        in_prolog = False
+                        prolog = b""
                     if depth > max_depth:
                         raise NmapXmlError(f"Nmap XML exceeds the {max_depth}-level nesting limit")
                     if depth == 1 and _tag(element) == "nmaprun" and on_root is not None:
