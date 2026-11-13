@@ -101,6 +101,18 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class BridgeRenderingTests(unittest.TestCase):
+    def test_a_bridge_gets_its_own_evidence_class(self) -> None:
+        from lumos.services.map_view import edge_class
+
+        bridge = MapEdge(
+            id="bridge:a~b", from_node_id="a", to_node_id="b", edge_type="shared",
+            source_kind="workspace", source_id="10.0.0.5", confidence=1.0,
+            first_observed_at="", last_confirmed_at="", author="workspace", bridge=True,
+        )
+        self.assertEqual(edge_class(bridge), "shared")
+
+
 class TuiWiringTests(unittest.TestCase):
     def test_single_file_uses_the_plain_loader(self) -> None:
         from lumos.tui import app
