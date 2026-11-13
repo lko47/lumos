@@ -18,7 +18,7 @@ from ..core.decisions import DecisionError, record_decision
 from ..core.text import sanitize_text
 from ..services import actions
 from ..services.map_view import MapSnapshot, MapSnapshotWatcher, load_map_snapshot, render_plain_snapshot
-from ..services import notes, positions, tags, workspace, path_view
+from ..services import notes, positions, review, tags, workspace, path_view
 from ..core import engines
 from . import theme
 from . import flows
@@ -408,8 +408,57 @@ def _editing_key(
     if key == ord("f"):
         _pin_on_selection(state, snapshot, ctx.window, ctx.database)
         return False
+    if key == ord("z"):
+        return _review_panel(ctx.window, ctx.styles, ctx.unicode_ok, ctx.database, state)
     handler = _note_on_selection if key == ord("b") else _tag_on_selection
     return handler(ctx.window, ctx.styles, ctx.unicode_ok, ctx.database, state, snapshot)
+
+
+_REVIEW_CHOICES = (
+    ("confirm", "confirmed"),
+    ("ignore", "ignored"),
+    ("flag", "flagged"),
+    ("mark out of scope", "out_of_scope"),
+)
+
+
+def _review_panel(
+    window: Any, styles: dict[str, int], unicode_ok: bool, database: Path, state: ViewState
+) -> bool:
+    """List the review queue and record one decision; True to reload."""
+    try:
+        items = review.list_items(database, limit=12)
+    except review.ReviewError as exc:
+        state.notify(str(exc))
+        return False
+    if not items:
+        state.notify("nothing to review")
+        return False
+    picked = forms.choose(
+        window, styles, unicode_ok, "review",
+        [item.short_summary for item in items],
+        note="Enter picks an item, then the decision. Esc closes.",
+    )
+    if picked is None or not (0 <= picked < len(items)):
+        return False
+    item = items[picked]
+    decision = forms.choose(
+        window, styles, unicode_ok, f"decide {item.reason_code}",
+        [label for label, _state in _REVIEW_CHOICES],
+        note=item.summary,
+    )
+    if decision is None or not (0 <= decision < len(_REVIEW_CHOICES)):
+        return False
+    try:
+        updated = review.set_state(
+            database, item.id, _REVIEW_CHOICES[decision][1],
+            author=actions.default_operator(),
+        )
+    except review.ReviewError as exc:
+        state.notify(str(exc))
+        return False
+    state.notify(f"{updated.reason_code}: {updated.state}")
+    return True
 
 
 def _map_panel_size(window: Any) -> tuple[int, int]:
@@ -962,7 +1011,7 @@ def _run_event_loop(ctx: UiContext, watcher: MapSnapshotWatcher) -> Path | None:
             theme_name = _cycle_theme(theme_name, capability)
             styles = theme.init_styles(theme_name, capability)
             state.notify(f"theme {theme_name} — {theme.THEME_DESCRIPTIONS.get(theme_name, '')}")
-        elif key in (ord("b"), ord("y"), ord("f")):
+        elif key in (ord("b"), ord("y"), ord("f"), ord("z")):
             if _editing_key(key, state, snapshot, ctx):
                 watcher.reload_now()
                 _refresh_path(state, snapshot)

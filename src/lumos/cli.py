@@ -32,7 +32,7 @@ from .core.vantage_store import save_interfaces
 from .core.scope import read_target_file
 from .core.scope_store import add_scope_rule
 from .core.xml_import import import_nmap_xml
-from .services import actions, compare, notes, tags
+from .services import actions, compare, notes, review, tags
 from .core import state as local_state
 
 AUTHORIZED_USE_NOTICE = "Authorized use only: scan systems and networks you own or are explicitly permitted to assess. Confirm scope and permissions before proceeding."
@@ -136,6 +136,17 @@ def _parser() -> argparse.ArgumentParser:
     compare_cmd.add_argument("--list", action="store_true", dest="list_scans",
                              help="list completed scans")
 
+    review_cmd = commands.add_parser("review", help="list review items and record decisions")
+    review_cmd.add_argument("database", type=Path)
+    review_cmd.add_argument("--list", action="store_true", dest="list_review")
+    review_cmd.add_argument("--state", default="", help="filter by current state")
+    review_cmd.add_argument("--limit", type=int, default=20)
+    review_cmd.add_argument("--decide", default="", help="review item id")
+    review_cmd.add_argument("--set", dest="set_state", default="",
+                            choices=("", *review.DECIDED_STATES))
+    review_cmd.add_argument("--note", default="", help="detail recorded with a decision")
+    review_cmd.add_argument("--operator", default=None)
+
     tag_cmd = commands.add_parser("tag", help="attach, list or remove tags")
     tag_cmd.add_argument("database", type=Path)
     tag_cmd.add_argument("names", nargs="*", help="tag names")
@@ -222,7 +233,7 @@ def _open_default(path: Path | None) -> int:
 
 
 SUBCOMMANDS = frozenset(
-    {"db", "scope", "interfaces", "scan", "import", "tui", "report", "note", "compare", "tag"}
+    {"db", "scope", "interfaces", "scan", "import", "tui", "report", "note", "compare", "tag", "review"}
 )
 
 
@@ -300,6 +311,36 @@ def _run_scan(args: Any) -> int:
     if result.stderr:
         print(result.stderr, file=sys.stderr)
     return 0 if status == "completed" else 1
+
+
+def _run_review(args: Any) -> int:
+    """List the review queue, or record one decision."""
+    try:
+        if args.decide:
+            if not args.set_state:
+                print("lumos: --decide needs --set", file=sys.stderr)
+                return 2
+            item = review.set_state(
+                args.database, args.decide, args.set_state,
+                author=args.operator or "operator", detail=args.note,
+            )
+            print(f"{item.reason_code} -> {item.state}")
+            return 0
+        items = review.list_items(args.database, limit=args.limit, state=args.state)
+        counts = review.states_of(args.database)
+        if not items:
+            print("nothing to review")
+        for item in items:
+            print(item.summary)
+        total = sum(counts.values())
+        print(
+            f"{total} item(s): "
+            + ", ".join(f"{name} {count}" for name, count in counts.items())
+        )
+        return 0
+    except review.ReviewError as exc:
+        print(f"lumos: {exc}", file=sys.stderr)
+        return 2
 
 
 def _merged_targets(args: Any) -> tuple[str, ...]:
@@ -431,7 +472,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command is None:
         return _open_default(None)
     try:
-        simple = {"compare": _run_compare, "note": _run_note, "tag": _run_tag}
+        simple = {
+            "compare": _run_compare, "note": _run_note, "tag": _run_tag,
+            "review": _run_review,
+        }
         if args.command in simple:
             return simple[args.command](args)
         if args.command == "interfaces":

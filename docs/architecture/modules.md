@@ -15,14 +15,14 @@ flowchart LR
     P0 -->|"1 imports"| P1
     P1 -->|"14 imports"| P2
     P1 -->|"2 imports"| P3
-    P1 -->|"5 imports"| P4
+    P1 -->|"6 imports"| P4
     P1 -->|"3 imports"| P5
     P2 -->|"7 imports"| P3
     P3 -->|"4 imports"| P2
-    P4 -->|"23 imports"| P2
+    P4 -->|"25 imports"| P2
     P4 -->|"2 imports"| P3
     P5 -->|"14 imports"| P2
-    P5 -->|"16 imports"| P4
+    P5 -->|"17 imports"| P4
 ```
 
 | importing module | imported module |
@@ -47,6 +47,7 @@ flowchart LR
 | `lumos.cli` | `lumos.services.actions` |
 | `lumos.cli` | `lumos.services.compare` |
 | `lumos.cli` | `lumos.services.notes` |
+| `lumos.cli` | `lumos.services.review` |
 | `lumos.cli` | `lumos.services.tags` |
 | `lumos.cli` | `lumos.tui.app` |
 | `lumos.cli` | `lumos.tui.start` |
@@ -84,6 +85,8 @@ flowchart LR
 | `lumos.services.notes` | `lumos.core.text` |
 | `lumos.services.positions` | `lumos.core.database` |
 | `lumos.services.positions` | `lumos.core.text` |
+| `lumos.services.review` | `lumos.core.database` |
+| `lumos.services.review` | `lumos.core.text` |
 | `lumos.services.tags` | `lumos.core.database` |
 | `lumos.services.tags` | `lumos.core.text` |
 | `lumos.tui.app` | `lumos.core` |
@@ -97,6 +100,7 @@ flowchart LR
 | `lumos.tui.app` | `lumos.services.notes` |
 | `lumos.tui.app` | `lumos.services.path_view` |
 | `lumos.tui.app` | `lumos.services.positions` |
+| `lumos.tui.app` | `lumos.services.review` |
 | `lumos.tui.app` | `lumos.services.tags` |
 | `lumos.tui.app` | `lumos.services.workspace` |
 | `lumos.tui.flows` | `lumos.core` |

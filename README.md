@@ -34,6 +34,7 @@ Nmap progress flags are enabled for builds that support `--stats-every` (7.60 or
 | `o` / `O` | toggle the selected hub / collapse every hub |
 | `[ set start ]` `[ set end ]` | click the sidebar buttons to mark a path |
 | `b` / `y` / `f` | note / tags / pin the selected node |
+| `z` | review queue: pick an item, then confirm, ignore, flag or mark out of scope |
 | `a` | motion on/off (dots, ripples, solid links) |
 | `+` `-` `0` | zoom in, zoom out, recentre |
 | arrows, `HJKL`, drag, wheel | pan, and zoom at the pointer |
@@ -44,6 +45,7 @@ Nmap progress flags are enabled for builds that support `--stats-every` (7.60 or
 | `?` `:` `/` | help, command palette, search |
 | `lumos note DB "text" --node ID` | attach a note to a node (`--list` to read them back; the sidebar shows the newest) |
 | `lumos tag DB dmz --node ID` | tag a node (`--list`, `--remove`) |
+| `lumos review DB [--decide ID --set confirmed]` | review queue and decisions |
 | `lumos scan DB --target-file FILE` | scope-checked targets from a file (`-sn` preset for discovery) |
 | `lumos report json\|csv\|html DB OUT` | machine-readable exports (owner-only files) |
 | `lumos compare DB` | diff the last two completed scans (`--from`/`--to` take an id or a unique prefix, `--list` shows them) |
