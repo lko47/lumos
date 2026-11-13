@@ -317,7 +317,11 @@ def _run_event_loop(
     capability: str,
     activity: actions.ActivityLog,
 ) -> Path | None:
-    snapshot = load_map_snapshot(database)
+    snapshot = watcher.prime()
+    if snapshot is None:
+        if watcher.error is not None:
+            raise watcher.error
+        snapshot = load_map_snapshot(database)
     state = ViewState()
     _clamp_selection(state, snapshot)
     dirty = True
@@ -325,8 +329,9 @@ def _run_event_loop(
         if dirty:
             _draw_frame(window, snapshot, state, styles, unicode_ok, theme_name, capability)
             dirty = False
-        # Animate only while something is actually moving.
-        if snapshot.active_scans or state.notify_active():
+        # Animate only while something is actually moving, and poll quickly
+        # while the watcher is rebuilding a snapshot the UI asked for.
+        if snapshot.active_scans or state.notify_active() or watcher.pending:
             window.timeout(250)
             dirty = True
         else:
@@ -375,8 +380,8 @@ def _run_event_loop(
             if switched is not None:
                 return switched
             try:
-                snapshot = load_map_snapshot(database, expanded_zone=state.expanded_zone)
-                _clamp_selection(state, snapshot)
+                watcher.expanded_zone = state.expanded_zone
+                watcher.reload_now()
             except Exception:  # keep the last good snapshot
                 pass
             dirty = True
@@ -445,11 +450,7 @@ def _run_event_loop(
                 state.expanded_zone = node.zone_id
                 state.notify(f"expanded {node.label}; o again collapses")
             watcher.expanded_zone = state.expanded_zone
-            try:
-                snapshot = load_map_snapshot(database, expanded_zone=state.expanded_zone)
-                _clamp_selection(state, snapshot)
-            except Exception as exc:
-                state.notify(f"reload failed: {exc}")
+            watcher.reload_now()
         elif key == ord("i"):
             state.show_inferred = not state.show_inferred
             state.notify(
@@ -457,15 +458,10 @@ def _run_event_loop(
             )
         elif key in (ord("p"), ord("x")) and state.selected_kind == "edge":
             _decide_link(database, state, snapshot, key)
-            try:
-                snapshot = load_map_snapshot(database, expanded_zone=state.expanded_zone)
-                _clamp_selection(state, snapshot)
-            except Exception:  # keep the previous snapshot on a reload failure
-                pass
+            watcher.reload_now()
         elif key == ord("r"):
-            snapshot = load_map_snapshot(database, expanded_zone=state.expanded_zone)
-            _clamp_selection(state, snapshot)
-            state.notify("snapshot reloaded")
+            watcher.reload_now()
+            state.notify("reloading")
         elif key in (10, 13):
             _set_view(state, "map")
         if action:

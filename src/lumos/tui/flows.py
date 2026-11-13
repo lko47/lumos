@@ -171,7 +171,13 @@ def flow_open_path(window: Any, styles: dict[str, int], unicode_ok: bool) -> Pat
     )
     if values is None:
         return None
-    result = actions.open_engagement(values["path"])
+    result = run_task(
+        window,
+        styles,
+        unicode_ok,
+        "opening database",
+        lambda: actions.open_engagement(values["path"]),
+    )
     show_result(window, styles, unicode_ok, "open database", result)
     return Path(result.payload["path"]) if result.ok else None
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import queue
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -465,6 +466,7 @@ class MapSnapshotWatcher:
         self.database = Path(database)
         self.interval = interval
         self._stop = threading.Event()
+        self._reload = threading.Event()
         self._updates: queue.Queue[MapSnapshot] = queue.Queue(maxsize=1)
         self._error: BaseException | None = None
         self.expanded_zone = ""
@@ -474,6 +476,11 @@ class MapSnapshotWatcher:
     def error(self) -> BaseException | None:
         return self._error
 
+    @property
+    def pending(self) -> bool:
+        """True while an on-demand reload has not been picked up yet."""
+        return self._reload.is_set()
+
     def start(self) -> None:
         self._thread.start()
 
@@ -481,6 +488,22 @@ class MapSnapshotWatcher:
         self._stop.set()
         if self._thread.is_alive():
             self._thread.join(timeout=6.0)
+
+    def reload_now(self) -> None:
+        """Ask the watcher thread for a fresh snapshot without touching the UI."""
+        self._reload.set()
+
+    def prime(self, timeout: float = 10.0) -> MapSnapshot | None:
+        """Wait for the watcher's first snapshot so the UI never loads one itself."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            latest = self.take_latest()
+            if latest is not None:
+                return latest
+            if self._error is not None:
+                return None
+            time.sleep(0.02)
+        return None
 
     def take_latest(self) -> MapSnapshot | None:
         latest = None
@@ -508,13 +531,19 @@ class MapSnapshotWatcher:
         try:
             conn = open_database(self.database, readonly=True)
             version = int(conn.execute("PRAGMA data_version").fetchone()[0])
-            while not self._stop.wait(self.interval):
+            self._publish(load_map_snapshot(self.database, expanded_zone=self.expanded_zone))
+            while not self._stop.is_set():
+                triggered = self._reload.wait(self.interval)
+                if self._stop.is_set():
+                    break
                 current = int(conn.execute("PRAGMA data_version").fetchone()[0])
-                if current != version:
+                if triggered or current != version:
+                    self._reload.clear()
                     version = current
                     self._publish(load_map_snapshot(self.database, expanded_zone=self.expanded_zone))
         except Exception as exc:
             self._error = exc
+            self._reload.clear()
         finally:
             if conn is not None:
                 conn.close()
