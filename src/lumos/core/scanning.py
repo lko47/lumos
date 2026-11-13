@@ -22,7 +22,13 @@ from .nmap.runner import (
 )
 from .scope import ScopeRule, is_target_in_scope, parse_target
 from .scope_store import get_network, read_scope_rules
-from .scan_store import ScanWriter, make_scan_context
+from .scan_store import (
+    ScanWriter,
+    acquire_scan_lock,
+    make_scan_context,
+    reconcile_interrupted_scans,
+    release_scan_lock,
+)
 from .text import sanitize_text
 
 
@@ -78,6 +84,9 @@ def scan_database(
         raise ValueError("Targets must not be empty")
     for target in normalized_targets:
         parse_target(target)  # Strict syntax validation happens before process launch.
+    # A previous run killed mid-scan leaves its row 'running'; nothing else
+    # would ever clear it when no scanner process holds the lock.
+    reconcile_interrupted_scans(database_path)
 
     engagement_id, network_id = get_network(database_path, network_name)
     scope_rules = read_scope_rules(database_path, engagement_id)
@@ -156,39 +165,43 @@ def scan_database(
     except Exception:  # --iflist is best-effort; never abort a scan for it
         context["iflist"] = None
     writer = ScanWriter(database_path, context)
+    scan_lock = acquire_scan_lock(database_path)
     try:
-        result = run_nmap(
-            argv,
-            on_host=writer.submit_host,
-            evidence=evidence,
-            stderr_callback=on_progress,
-            cancel_event=cancel_event,
-        )
-    except BaseException as exc:
-        writer.finish(
-            exit_code=-1,
-            status="failed",
-            evidence=None,
-            evidence_bytes=0,
-            evidence_sha256="",
-            detail=sanitize_text(exc, max_chars=4096),
-        )
-        raise
+        try:
+            result = run_nmap(
+                argv,
+                on_host=writer.submit_host,
+                evidence=evidence,
+                stderr_callback=on_progress,
+                cancel_event=cancel_event,
+            )
+        except BaseException as exc:
+            writer.finish(
+                exit_code=-1,
+                status="failed",
+                evidence=None,
+                evidence_bytes=0,
+                evidence_sha256="",
+                detail=sanitize_text(exc, max_chars=4096),
+            )
+            raise
 
-    if result.cancelled:
-        status = "cancelled"
-    elif result.exit_code != 0 or result.parse_error:
-        status = "failed"
-    else:
-        status = "completed"
-    writer.finish(
-        exit_code=result.exit_code,
-        status=status,
-        evidence=result.compressed_xml,
-        evidence_bytes=result.xml_bytes,
-        evidence_sha256=result.xml_sha256,
-        detail=result.parse_error or result.stderr,
-    )
+        if result.cancelled:
+            status = "cancelled"
+        elif result.exit_code != 0 or result.parse_error:
+            status = "failed"
+        else:
+            status = "completed"
+        writer.finish(
+            exit_code=result.exit_code,
+            status=status,
+            evidence=result.compressed_xml,
+            evidence_bytes=result.xml_bytes,
+            evidence_sha256=result.xml_sha256,
+            detail=result.parse_error or result.stderr,
+        )
+    finally:
+        release_scan_lock(scan_lock)
     if status == "completed":
         # Derive the inferred links from the stored interface/route facts. This
         # runs on its own connection after the writer thread closed, and a

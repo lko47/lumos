@@ -20,6 +20,7 @@ from ..services.map_view import MapSnapshot, MapSnapshotWatcher, load_map_snapsh
 from . import theme
 from . import flows
 from .overlays import draw_help, draw_palette
+from .widgets import set_backdrop
 from .render import (
     ViewState,
     draw_footer,
@@ -326,6 +327,12 @@ def _run_event_loop(
     _clamp_selection(state, snapshot)
     dirty = True
     while True:
+        # Modals repaint this frame behind themselves instead of blanking a
+        # rectangle, so an open dialog never leaves holes in the map.
+        set_backdrop(
+            window,
+            lambda: _draw_frame(window, snapshot, state, styles, unicode_ok, theme_name, capability),
+        )
         if dirty:
             _draw_frame(window, snapshot, state, styles, unicode_ok, theme_name, capability)
             dirty = False

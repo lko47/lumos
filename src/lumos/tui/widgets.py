@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import curses
 import unicodedata
+import weakref
 from datetime import datetime, timezone
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from ..core.text import sanitize_text
 
@@ -84,6 +85,95 @@ def hline(window: Any, y: int, x: int, width: int, attr: int, *, unicode_ok: boo
         pass
 
 
+def fit_box(
+    window: Any,
+    width: int,
+    height: int,
+    *,
+    margin: int = 2,
+    min_width: int = 24,
+    min_height: int = 6,
+) -> tuple[int, int, int, int] | None:
+    """Centre a box of at most ``width``x``height`` inside the window.
+
+    Returns ``(top, left, height, width)`` clamped so the frame never runs past
+    the terminal edge, or ``None`` when the terminal is too small for a modal.
+    """
+    total_height, total_width = window.getmaxyx()
+    if total_width < min_width or total_height < min_height:
+        return None
+    box_width = max(min_width, min(width, total_width - margin))
+    box_height = max(min_height, min(height, total_height - margin))
+    left = max(0, min((total_width - box_width) // 2, total_width - box_width))
+    top = max(0, min((total_height - box_height) // 2, total_height - box_height))
+    return top, left, box_height, box_width
+
+
+# Track drawn rectangles per window: weakly for test doubles, by id for the
+# real curses window, which has neither __dict__ nor a weak reference.
+_REGIONS_WEAK: "weakref.WeakKeyDictionary[Any, list[tuple[int, int, int, int]]]" = (
+    weakref.WeakKeyDictionary()
+)
+_REGIONS_BY_ID: dict[int, list[tuple[int, int, int, int]]] = {}
+
+
+_BACKDROPS: dict[int, Callable[[], None]] = {}
+
+
+def set_backdrop(window: Any, paint: Callable[[], None] | None) -> None:
+    """Register the call that repaints the screen behind a modal.
+
+    With a backdrop the modal repaints the real frame instead of blanking
+    rectangles, so the map, its borders and the side panel stay intact while a
+    dialog is open.
+    """
+    if paint is None:
+        _BACKDROPS.pop(id(window), None)
+    else:
+        _BACKDROPS[id(window)] = paint
+
+
+def _regions(window: Any) -> list[tuple[int, int, int, int]]:
+    try:
+        return _REGIONS_WEAK.setdefault(window, [])
+    except TypeError:
+        return _REGIONS_BY_ID.setdefault(id(window), [])
+
+
+def clear_region(window: Any, rect: tuple[int, int, int, int]) -> None:
+    """Blank a rectangle so a redrawn or moved modal leaves no ghosts behind."""
+    total_height, total_width = window.getmaxyx()
+    top, left, height, width = rect
+    left = max(0, min(left, total_width - 1))
+    width = min(width, total_width - left)
+    if height <= 0 or width <= 0:
+        return
+    blank = " " * width
+    for row in range(top, min(top + height, total_height)):
+        safe_addstr(window, row, left, blank, width)
+
+
+def clear_overlays(window: Any) -> None:
+    """Erase every rectangle a modal drew earlier, then forget them.
+
+    Modals are layered one at a time; without this a form that grows by a row
+    (or a terminal resize that re-centres it) leaves the previous frame on
+    screen and the boxes end up overlapping.
+    """
+    paint = _BACKDROPS.get(id(window))
+    if paint is not None:
+        _regions(window).clear()
+        paint()
+        return
+    for rect in _regions(window):
+        clear_region(window, rect)
+    _regions(window).clear()
+
+
+def remember_overlay(window: Any, rect: tuple[int, int, int, int]) -> None:
+    _regions(window).append(rect)
+
+
 def draw_box(
     window: Any,
     top: int,
@@ -96,10 +186,17 @@ def draw_box(
     title_attr: int = 0,
     unicode_ok: bool = True,
     focused: bool = False,
+    clear: bool = True,
 ) -> tuple[int, int, int, int]:
-    """Draw a framed panel and return the inner ``(top, left, height, width)``."""
+    """Draw a framed panel and return the inner ``(top, left, height, width)``.
+
+    The rectangle is blanked first, so a panel redrawn over older content never
+    leaves stale borders or text behind.
+    """
     if height < 2 or width < 2:
         return (top, left, 0, 0)
+    if clear:
+        clear_region(window, (top, left, height, width))
     if unicode_ok:
         tl, tr, bl, br, hz, vt = "╭", "╮", "╰", "╯", "─", "│"
     else:

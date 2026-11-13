@@ -4,11 +4,57 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
+import textwrap
 
-from .widgets import draw_box, safe_addstr
+from .widgets import (
+    clear_overlays,
+    draw_box,
+    remember_overlay,
+    safe_addstr,
+)
 
 CONTROL_HINT = "Enter save   Tab next   Esc cancel"
 CONTROL_HINT_BOOL = "Space toggle   Enter save   Esc cancel"
+MIN_MODAL_WIDTH = 26
+MIN_MODAL_HEIGHT = 8
+
+
+def _wrap(text: str, width: int, *, max_lines: int = 6) -> list[str]:
+    """Wrap a note or error so a long phrase stays readable on a narrow terminal."""
+    if not text:
+        return []
+    lines: list[str] = []
+    for paragraph in text.splitlines() or [""]:
+        wrapped = textwrap.wrap(
+            paragraph,
+            width=max(8, width),
+            break_long_words=True,
+            break_on_hyphens=False,
+            replace_whitespace=True,
+        ) or [""]
+        lines.extend(wrapped)
+    return lines[:max_lines]
+
+
+def _clamp(
+    height: int, width: int, top: int, left: int, box_height: int, box_width: int
+) -> tuple[int, int, int, int]:
+    """Keep a modal fully inside the terminal after a resize."""
+    box_height = max(4, min(box_height, height))
+    box_width = max(8, min(box_width, width))
+    top = max(0, min(top, height - box_height))
+    left = max(0, min(left, width - box_width))
+    return top, left, box_height, box_width
+
+
+def _too_small(window: Any, styles: dict[str, int], unicode_ok: bool) -> bool:
+    height, width = window.getmaxyx()
+    if height >= MIN_MODAL_HEIGHT and width >= MIN_MODAL_WIDTH:
+        return False
+    message = f"terminal too small for a dialog ({width}x{height})"
+    safe_addstr(window, 0, 0, message, max(1, width), _attr(styles, "error"), unicode_ok=unicode_ok)
+    window.refresh()
+    return True
 
 
 @dataclass
@@ -48,12 +94,20 @@ def _draw(
     error: str,
     busy: str = "",
 ) -> None:
+    if _too_small(window, styles, unicode_ok):
+        return
     height, width = window.getmaxyx()
-    box_width = min(76, max(40, width - 6))
-    rows_needed = len(fields) + (1 if note else 0) + (1 if error else 0) + (1 if busy else 0) + 5
-    box_height = min(max(8, rows_needed), max(8, height - 2))
+    box_width = min(76, max(24, width - 2))
+    inner = max(8, box_width - 4)
+    note_lines = _wrap(note, inner)
+    error_lines = _wrap(error, inner)
+    rows_needed = len(fields) + 1 + len(note_lines) + len(error_lines) + (1 if busy else 0) + 3
+    box_height = min(rows_needed, max(8, height - 2))
+    clear_overlays(window)
     top = max(0, (height - box_height) // 2)
     left = max(0, (width - box_width) // 2)
+    top, left, box_height, box_width = _clamp(height, width, top, left, box_height, box_width)
+    remember_overlay(window, (top, left, box_height, box_width))
     itop, ileft, ih, iw = draw_box(
         window,
         top,
@@ -86,11 +140,15 @@ def _draw(
         )
         row += 1
     row += 1
-    if note and row < itop + ih:
-        safe_addstr(window, row, ileft, note, iw, _attr(styles, "muted"), unicode_ok=unicode_ok)
+    for line in note_lines:
+        if row >= itop + ih - 1:
+            break
+        safe_addstr(window, row, ileft, line, iw, _attr(styles, "muted"), unicode_ok=unicode_ok)
         row += 1
-    if error and row < itop + ih:
-        safe_addstr(window, row, ileft, error, iw, _attr(styles, "error"), unicode_ok=unicode_ok)
+    for line in error_lines:
+        if row >= itop + ih - 1:
+            break
+        safe_addstr(window, row, ileft, line, iw, _attr(styles, "error"), unicode_ok=unicode_ok)
         row += 1
     if busy and row < itop + ih:
         safe_addstr(window, row, ileft, busy, iw, _attr(styles, "accent"), unicode_ok=unicode_ok)
@@ -208,11 +266,16 @@ def confirm(
     detail: str = "",
 ) -> bool:
     """Single-key yes/no; ``n`` or Escape refuses."""
+    if _too_small(window, styles, unicode_ok):
+        return False
     height, width = window.getmaxyx()
-    box_width = min(66, max(36, width - 6))
+    box_width = min(66, max(24, width - 2))
     box_height = 7 if not detail else 8
     top = max(0, (height - box_height) // 2)
     left = max(0, (width - box_width) // 2)
+    clear_overlays(window)
+    top, left, box_height, box_width = _clamp(height, width, top, left, box_height, box_width)
+    remember_overlay(window, (top, left, box_height, box_width))
     itop, ileft, ih, iw = draw_box(
         window,
         top,
@@ -225,9 +288,12 @@ def confirm(
         unicode_ok=unicode_ok,
         focused=True,
     )
-    safe_addstr(window, itop, ileft, question, iw, _attr(styles, "text"), unicode_ok=unicode_ok)
-    if detail:
-        safe_addstr(window, itop + 1, ileft, detail, iw, _attr(styles, "muted"), unicode_ok=unicode_ok)
+    for offset, line in enumerate(_wrap(question, iw, max_lines=2)):
+        safe_addstr(window, itop + offset, ileft, line, iw, _attr(styles, "text"), unicode_ok=unicode_ok)
+    for offset, line in enumerate(_wrap(detail, iw, max_lines=2)):
+        row = itop + len(_wrap(question, iw, max_lines=2)) + offset
+        if row < itop + ih - 1:
+            safe_addstr(window, row, ileft, line, iw, _attr(styles, "muted"), unicode_ok=unicode_ok)
     safe_addstr(
         window,
         itop + ih - 1,
@@ -264,11 +330,16 @@ def choose(
     window.timeout(-1)
     try:
         while True:
+            if _too_small(window, styles, unicode_ok):
+                return None
             height, width = window.getmaxyx()
             box_height = min(len(options) + 5, max(8, height - 2))
-            box_width = min(72, max(40, width - 6))
+            box_width = min(72, max(24, width - 2))
             top = max(0, (height - box_height) // 2)
             left = max(0, (width - box_width) // 2)
+            clear_overlays(window)
+            top, left, box_height, box_width = _clamp(height, width, top, left, box_height, box_width)
+            remember_overlay(window, (top, left, box_height, box_width))
             itop, ileft, ih, iw = draw_box(
                 window,
                 top,

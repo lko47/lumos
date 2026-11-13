@@ -6,6 +6,7 @@ import gzip
 import hashlib
 import io
 import os
+import re
 import selectors
 import shlex
 import shutil
@@ -69,7 +70,24 @@ def inspect_nmap(executable: str) -> NmapVersion:
     first_line = (version_run.stdout or version_run.stderr).splitlines()
     version = sanitize_text(first_line[0] if first_line else "Nmap version unknown", max_chars=256)
     help_text = (help_run.stdout or "") + (help_run.stderr or "")
-    return NmapVersion(version, "--stats-every" in help_text)
+    return NmapVersion(version, _supports_stats(version, help_text))
+
+
+_STATS_EVERY_SINCE = (7, 60)
+
+
+def _supports_stats(version_line: str, help_text: str) -> bool:
+    """Nmap accepts ``--stats-every`` from 7.60 but never lists it in --help.
+
+    Probing the help text alone leaves the scan panel with no progress output,
+    which makes a normal 30-second scan look hung, so fall back to the version.
+    """
+    if "--stats-every" in help_text:
+        return True
+    match = re.search(r"(\d+)\.(\d+)", version_line or "")
+    if not match:
+        return False
+    return (int(match.group(1)), int(match.group(2))) >= _STATS_EVERY_SINCE
 
 
 def parse_manual_options(text: str) -> list[str]:
@@ -319,7 +337,11 @@ def run_nmap(
             stderr_callback=stderr_callback,
         )
         try:
-            for host in parse_nmap_xml(chunks, max_bytes=max_xml_bytes):
+            for host in parse_nmap_xml(
+                chunks,
+                max_bytes=max_xml_bytes,
+                on_progress=stderr_callback,
+            ):
                 on_host(host)
                 host_count[0] += 1
         except NmapXmlError as exc:

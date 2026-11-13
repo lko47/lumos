@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from ..services import actions
 from . import forms
-from .widgets import clip, draw_box, safe_addstr
+from .widgets import clear_overlays, clip, draw_box, remember_overlay, safe_addstr
 
 
 def _attr(styles: dict[str, int], name: str, default: int = 0) -> int:
@@ -17,10 +17,12 @@ def _attr(styles: dict[str, int], name: str, default: int = 0) -> int:
 
 def _box(window: Any, styles: dict[str, int], unicode_ok: bool, *, title: str, width: int = 72, height: int = 12):
     total_height, total_width = window.getmaxyx()
-    box_width = min(width, max(36, total_width - 6))
-    box_height = min(height, max(8, total_height - 2))
+    box_width = min(width, max(20, total_width - 2))
+    box_height = min(height, max(6, total_height - 2))
     top = max(0, (total_height - box_height) // 2)
     left = max(0, (total_width - box_width) // 2)
+    clear_overlays(window)
+    remember_overlay(window, (top, left, box_height, box_width))
     return draw_box(
         window,
         top,
@@ -368,9 +370,10 @@ def flow_scan(
 def _watch_scan(
     window: Any, styles: dict[str, int], unicode_ok: bool, job: actions.ScanJob
 ) -> actions.ActionResult:
-    lines: list[str] = ["waiting for Nmap…"]
+    lines: list[str] = []
     command = ""
     outcome: actions.ActionResult | None = None
+    confirm_cancel = False
     window.timeout(150)
     try:
         while outcome is None:
@@ -385,28 +388,52 @@ def _watch_scan(
                 elif kind == "done":
                     outcome = payload
             itop, ileft, ih, iw = _box(window, styles, unicode_ok, title="scanning", width=78, height=12)
-            state = "cancelling…" if job.cancel_event.is_set() else "running"
+            if job.cancel_event.is_set():
+                state = "cancelling…"
+            elif confirm_cancel:
+                state = "Esc again to cancel, any other key keeps scanning"
+            else:
+                state = "running"
             safe_addstr(
                 window,
                 itop,
                 ileft,
-                clip(f"{state}  {job.elapsed:.1f}s   Esc cancel", iw),
+                clip(f"{state}  {job.elapsed:.1f}s", iw),
                 iw,
-                _attr(styles, "accent"),
+                _attr(styles, "error") if confirm_cancel else _attr(styles, "accent"),
                 unicode_ok=unicode_ok,
             )
             if command:
                 safe_addstr(window, itop + 1, ileft, clip(command, iw), iw, _attr(styles, "muted"), unicode_ok=unicode_ok)
             row = itop + 3
-            for line in lines[-4:]:
+            shown = lines[-4:] or ["Nmap is working; hosts appear when the XML lands."]
+            for line in shown:
                 if row >= itop + ih - 1:
                     break
                 safe_addstr(window, row, ileft, clip(line, iw), iw, _attr(styles, "text"), unicode_ok=unicode_ok)
                 row += 1
+            safe_addstr(
+                window,
+                itop + ih - 1,
+                ileft,
+                "Esc twice cancels; finished hosts are kept" if not job.cancel_event.is_set() else "cancelling; finished hosts are kept",
+                iw,
+                _attr(styles, "muted"),
+                unicode_ok=unicode_ok,
+            )
             window.refresh()
             key = window.getch()
-            if key == 27 and not job.cancel_event.is_set():
-                job.cancel()
+            if key == -1:
+                continue
+            if key == 27:
+                if job.cancel_event.is_set():
+                    continue
+                if confirm_cancel:
+                    job.cancel()
+                else:
+                    confirm_cancel = True
+            else:
+                confirm_cancel = False
     finally:
         window.timeout(1000)
     return outcome or actions.ActionResult(False, "scan ended without a result")

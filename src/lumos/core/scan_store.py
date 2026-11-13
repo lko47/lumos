@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import ipaddress
 import json
 import queue
+import os
 import re
 import threading
 import uuid
@@ -22,6 +24,87 @@ from .topology_store import ensure_node
 
 _BATCH_SIZE = 50
 _MAC = re.compile(r"^[0-9a-fA-F]{12}$")
+_SCAN_LOCK_SUFFIX = ".scan-lock"
+
+
+def _scan_lock_path(database: str | Path) -> Path:
+    return Path(str(database) + _SCAN_LOCK_SUFFIX)
+
+
+def acquire_scan_lock(database: str | Path) -> int | None:
+    """Take a shared advisory lock for as long as a scan runs.
+
+    ``reconcile_interrupted_scans`` asks for the same lock exclusively, so it
+    can tell a scan that is still alive from one whose process died.
+    """
+    try:
+        handle = os.open(_scan_lock_path(database), os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError:
+        return None
+    try:
+        fcntl.flock(handle, fcntl.LOCK_SH)
+    except OSError:
+        os.close(handle)
+        return None
+    return handle
+
+
+def release_scan_lock(handle: int | None) -> None:
+    if handle is None:
+        return
+    try:
+        fcntl.flock(handle, fcntl.LOCK_UN)
+    finally:
+        os.close(handle)
+
+
+def reconcile_interrupted_scans(database: str | Path) -> int:
+    """Close scans left ``running`` by a process that no longer exists.
+
+    A cancelled process, a closed terminal or a crash leaves the row in
+    ``running``; the map then claims a scan is active forever. The row is only
+    touched when no live scanner holds the shared lock.
+    """
+    try:
+        handle = os.open(_scan_lock_path(database), os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError:
+        return 0
+    try:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return 0  # a scan is still running
+        conn = open_database(database)
+        try:
+            rows = conn.execute(
+                "SELECT id, engagement_id FROM scans WHERE status = 'running'"
+            ).fetchall()
+            if not rows:
+                return 0
+            now = utc_now()
+            for scan_id, engagement_id in rows:
+                conn.execute(
+                    "UPDATE scans SET status = 'failed', ended_at = COALESCE(ended_at, ?) "
+                    "WHERE id = ? AND status = 'running'",
+                    (now, scan_id),
+                )
+                conn.execute(
+                    "INSERT INTO audit_events(id, engagement_id, scan_id, event_type, "
+                    "occurred_at, details_json) VALUES (?, ?, ?, 'scan_interrupted', ?, ?)",
+                    (
+                        str(uuid.uuid4()),
+                        engagement_id,
+                        scan_id,
+                        now,
+                        json.dumps({"reason": "no live scanner process held the scan lock"}),
+                    ),
+                )
+            conn.commit()
+            return len(rows)
+        finally:
+            conn.close()
+    finally:
+        os.close(handle)
 
 
 class ScanStoreError(RuntimeError):

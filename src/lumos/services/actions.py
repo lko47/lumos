@@ -31,7 +31,7 @@ from ..core.merge import MergeError, merge_engagement
 from ..core.nmap.iflist import discover_interfaces
 from ..core.nmap.runner import NmapRunnerError
 from ..core.reports import write_markdown_report, write_svg_report
-from ..core.scan_store import ScanStoreError
+from ..core.scan_store import ScanStoreError, reconcile_interrupted_scans
 from ..core.scanning import ScopeConfirmationRequired, scan_database
 from ..core.scope import is_target_in_scope, parse_target
 from ..core.scope_store import add_scope_rule, ensure_network, get_network, read_scope_rules
@@ -119,11 +119,13 @@ def open_engagement(path: str | Path) -> ActionResult:
         if not target.is_file():
             return _fail(f"no database at {target}")
         result = check_database(target)
+        interrupted = reconcile_interrupted_scans(target)
         name = _engagement_name(target)
         state.remember_engagement(target, name)
         return _ok(
             f"opened {name or target.name}",
-            detail=f"schema {result['user_version']}",
+            detail=f"schema {result['user_version']}"
+            + (f"; {interrupted} interrupted scan(s) closed" if interrupted else ""),
             payload={"path": str(target), "name": name},
         )
 

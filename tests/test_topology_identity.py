@@ -28,6 +28,12 @@ class TopologyIdentityTests(unittest.TestCase):
         self.conn = open_database(self.db, readonly=True)
         self.addCleanup(self.conn.close)
 
+    def _reopen(self) -> None:
+        """Point at a fresh snapshot without leaking the previous handle."""
+        self.conn.close()
+        self.conn = open_database(self.db, readonly=True)
+        self.addCleanup(self.conn.close)
+
     def _scan(self, fixture: Path) -> None:
         with patch.dict(os.environ, {"NMAP_FAKE_FIXTURE": str(fixture)}):
             scan_database(self.db, "lab", ["192.0.2.10"], executable=str(FAKE), operator="t")
@@ -38,8 +44,7 @@ class TopologyIdentityTests(unittest.TestCase):
     def test_repeated_scan_reuses_root_and_hop_nodes(self) -> None:
         self._scan(TRACED)
         self._scan(TRACED)
-        self.conn.close()
-        self.conn = open_database(self.db, readonly=True)
+        self._reopen()
         self.assertEqual(self._count("SELECT COUNT(*) FROM topology_nodes WHERE kind = 'root'"), 1)
         self.assertEqual(self._count("SELECT COUNT(*) FROM topology_nodes WHERE kind = 'hop'"), 2)
         self.assertEqual(self._count("SELECT COUNT(*) FROM topology_nodes WHERE kind = 'unknown_hop'"), 1)
@@ -49,8 +54,7 @@ class TopologyIdentityTests(unittest.TestCase):
 
     def test_hop_nodes_are_keyed_on_the_address_row(self) -> None:
         self._scan(TRACED)
-        self.conn.close()
-        self.conn = open_database(self.db, readonly=True)
+        self._reopen()
         hop_entities = [
             row[0]
             for row in self.conn.execute(
@@ -75,11 +79,9 @@ class TopologyIdentityTests(unittest.TestCase):
                 "SELECT from_node_id, to_node_id, edge_type, source_kind FROM topology_edges"
             )
         }
-        self.conn.close()
-        self.conn = open_database(self.db, readonly=True)
+        self._reopen()
         self._scan(TRACED)
-        self.conn.close()
-        self.conn = open_database(self.db, readonly=True)
+        self._reopen()
         second = {
             (row[0], row[1], row[2], row[3])
             for row in self.conn.execute(
@@ -99,8 +101,7 @@ class TopologyIdentityTests(unittest.TestCase):
     def test_review_items_are_reused_across_scans(self) -> None:
         self._scan(TRACED)
         self._scan(TRACED)
-        self.conn.close()
-        self.conn = open_database(self.db, readonly=True)
+        self._reopen()
         items = self._count(
             "SELECT COUNT(*) FROM review_items WHERE reason_code = 'unresponsive_traceroute_hop'"
         )
@@ -117,8 +118,7 @@ class TopologyIdentityTests(unittest.TestCase):
         # links from stored interface/route facts and marks every row derived.
         self.assertEqual(self._count("SELECT COUNT(*) FROM topology_edges"), 2)
         rebuild_inferred(self.db)
-        self.conn.close()
-        self.conn = open_database(self.db, readonly=True)
+        self._reopen()
         rows = self.conn.execute(
             "SELECT edge_type, source_kind, confidence, last_confirmed_at, derived, evidence_json "
             "FROM topology_edges ORDER BY confidence"
@@ -135,14 +135,12 @@ class TopologyIdentityTests(unittest.TestCase):
 
     def test_traced_hosts_do_not_get_inferred_links(self) -> None:
         self._scan(TRACED)
-        self.conn.close()
-        self.conn = open_database(self.db, readonly=True)
+        self._reopen()
         self.assertEqual(self._count("SELECT COUNT(*) FROM topology_edges WHERE edge_type = 'inferred'"), 0)
 
     def test_not_shown_counter_reports_the_hidden_nodes(self) -> None:
         self._scan(TRACED)
-        self.conn.close()
-        self.conn = open_database(self.db, readonly=True)
+        self._reopen()
         total = self._count("SELECT COUNT(*) FROM topology_nodes")
         snapshot = load_map_snapshot(self.db, max_nodes=2)
         self.assertEqual(len(snapshot.nodes), 2)

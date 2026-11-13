@@ -259,12 +259,31 @@ def check_prolog_declarations(prolog: bytes) -> None:
         index = upper.find(_DOCTYPE_TOKEN, end + 1)
 
 
+def _progress_note(attributes: dict[str, str]) -> str:
+    """Format one ``<taskprogress>`` element for the scan panel."""
+    percent = attributes.get("percent", "").strip()
+    remaining = attributes.get("remaining", "").strip()
+    task = _text(attributes.get("task", ""), limit=48)
+    parts = []
+    if task:
+        parts.append(task.replace("_", " "))
+    if percent:
+        try:
+            parts.append(f"{float(percent):.0f}%")
+        except ValueError:
+            pass
+    if remaining:
+        parts.append(f"{remaining} left")
+    return " · ".join(parts)
+
+
 def parse_nmap_xml(
     chunks: Iterable[bytes],
     *,
     max_bytes: int = MAX_XML_BYTES,
     max_depth: int = MAX_XML_DEPTH,
     on_root: Callable[[dict[str, str]], None] | None = None,
+    on_progress: Callable[[str], None] | None = None,
 ) -> Iterator[HostRecord]:
     """Yield complete hosts as chunks arrive; reject declarations and bound resources.
 
@@ -312,6 +331,14 @@ def parse_nmap_xml(
                     continue
                 if _tag(element) == "host":
                     yield _parse_host(element)
+                    element.clear()
+                elif _tag(element) == "taskprogress" and on_progress is not None:
+                    # Nmap writes real progress into the XML stream when it is
+                    # started with --stats-every; that is the only progress a
+                    # pipe-based reader can see, since +oX - owns stdout.
+                    note = _progress_note(element.attrib)
+                    if note:
+                        on_progress(note)
                     element.clear()
                 depth -= 1
         parser.close()

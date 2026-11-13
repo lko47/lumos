@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Sequence
 
-from .widgets import clip, draw_box, safe_addstr
+from .widgets import clear_overlays, clip, draw_box, remember_overlay, safe_addstr
 
 
 def _attr(styles: dict[str, int], name: str, default: int = 0) -> int:
@@ -15,11 +15,20 @@ def _centered(width: int, height: int, box_width: int, box_height: int) -> tuple
     return max(0, (height - box_height) // 2), max(0, (width - box_width) // 2)
 
 
+def _place(window: Any, box_width: int, box_height: int) -> tuple[int, int, int, int]:
+    """Clamp an overlay to the terminal so a resize never clips or shifts it off-screen."""
+    height, width = window.getmaxyx()
+    box_width = max(12, min(box_width, width))
+    box_height = max(4, min(box_height, height))
+    top, left = _centered(width, height, box_width, box_height)
+    clear_overlays(window)
+    remember_overlay(window, (top, left, box_height, box_width))
+    return top, left, box_height, box_width
+
+
 def draw_help(window: Any, styles: dict[str, int], unicode_ok: bool) -> None:
     height, width = window.getmaxyx()
-    box_width = min(78, max(44, width - 8))
-    box_height = min(17, max(10, height - 2))
-    top, left = _centered(width, height, box_width, box_height)
+    top, left, box_height, box_width = _place(window, min(78, max(30, width - 4)), min(17, max(10, height - 2)))
     itop, ileft, ih, iw = draw_box(
         window, top, left, box_height, box_width, title=" HELP ",
         border_attr=_attr(styles, "border_focus"), title_attr=_attr(styles, "brand"),
@@ -159,9 +168,7 @@ def draw_palette(
     index: int,
 ) -> None:
     height, width = window.getmaxyx()
-    box_width = min(66, max(38, width - 10))
-    box_height = min(len(entries) + 3, max(7, height - 4))
-    top, left = _centered(width, height, box_width, box_height)
+    top, left, box_height, box_width = _place(window, min(66, max(28, width - 4)), min(len(entries) + 3, max(7, height - 4)))
     itop, ileft, ih, iw = draw_box(
         window, top, left, box_height, box_width, title=" COMMAND PALETTE ",
         border_attr=_attr(styles, "border_focus"), title_attr=_attr(styles, "brand"),
