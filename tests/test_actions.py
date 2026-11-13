@@ -169,6 +169,14 @@ class ReportAndMaintenanceTests(ActionsTestCase):
         self.assertTrue(result.ok, result.message)
         self.assertGreaterEqual(result.payload["hosts"], 1)
 
+    def test_truncated_import_reports_the_parse_error_instead_of_raising(self) -> None:
+        db = self.make_database()
+        truncated = ROOT / "tests" / "fixtures" / "nmap" / "truncated.xml"
+        result = actions.import_xml(db, truncated, network="lab")
+        self.assertFalse(result.ok)
+        self.assertIn("Truncated", result.detail)
+        self.assertTrue(result.payload["scan_id"])
+
     def test_activity_log_is_bounded_and_writable(self) -> None:
         log = actions.ActivityLog(limit=3)
         for index in range(5):

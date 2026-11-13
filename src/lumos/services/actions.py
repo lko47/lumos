@@ -61,8 +61,8 @@ def _ok(message: str, *, detail: str = "", payload: Any = None) -> ActionResult:
     return ActionResult(True, message, detail, payload)
 
 
-def _fail(message: str, *, detail: str = "") -> ActionResult:
-    return ActionResult(False, message, detail, payload=None)
+def _fail(message: str, *, detail: str = "", payload: Any = None) -> ActionResult:
+    return ActionResult(False, message, detail, payload)
 
 
 def _guarded(operation: Callable[[], ActionResult]) -> ActionResult:
