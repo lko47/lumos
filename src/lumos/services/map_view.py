@@ -34,6 +34,7 @@ class MapNode:
     assumed: bool = False
     placeholder: bool = False
     zone_id: str = ""
+    note: str = ""
     ttl_hops: int | None = None
     duplicate_count: int = 1
     source_tag: str = ""
@@ -104,6 +105,7 @@ def collapse_duplicates(
     collapsed: list[MapNode] = []
     counts: dict[str, int] = {}
     reviews: dict[str, int] = {}
+    notes_seen: dict[str, list[str]] = {}
     for node in nodes:
         key = tuple(sorted(address.lower() for address in node.addresses))
         if node.kind != "device" or not key:
@@ -114,11 +116,14 @@ def collapse_duplicates(
             groups[key] = node
             counts[node.id] = 1
             reviews[node.id] = node.review_count
+            notes_seen[node.id] = [node.note] if node.note else []
             collapsed.append(node)
             continue
         aliases[node.id] = first.id
         counts[first.id] = counts.get(first.id, 1) + 1
         reviews[first.id] = reviews.get(first.id, 0) + node.review_count
+        if node.note and node.note not in notes_seen.setdefault(first.id, []):
+            notes_seen[first.id].append(node.note)
 
     if not aliases:
         return nodes, edges
@@ -128,6 +133,7 @@ def collapse_duplicates(
             node,
             duplicate_count=counts.get(node.id, 1),
             review_count=reviews.get(node.id, node.review_count),
+            note=" · ".join(notes_seen.get(node.id, []))[:120],
         )
         if node.id in counts
         else node
@@ -273,6 +279,9 @@ def load_map_snapshot(
                       COALESCE(a.addresses, '') AS addresses,
                       COALESCE(pc.open_ports, 0) AS open_ports,
                       COALESCE(ha.display_value, '') AS hop_address,
+                      COALESCE((SELECT substr(n.body_markdown, 1, 80) FROM notes n
+                                WHERE n.target_kind = 'topology_node' AND n.target_id = tn.id
+                                ORDER BY n.updated_at DESC, n.id DESC LIMIT 1), '') AS note,
                       (SELECT COUNT(*) FROM zone_memberships zm WHERE tn.kind = 'zone' AND zm.zone_id = tn.entity_id) AS members,
                COALESCE((SELECT group_concat(p.port || '/' || p.protocol, ' ')
                                 FROM port_observations p
@@ -377,6 +386,7 @@ def load_map_snapshot(
                     placeholder=kind == "unknown_hop"
                     and str(row["entity_id"] or "").startswith("gateway:"),
                     zone_id=str(row["entity_id"] or "") if kind == "zone" else "",
+                    note=str(row["note"] or ""),
                     ttl_hops=ttl_hops(row["reason_ttl"]),
                 )
             )
@@ -407,23 +417,11 @@ def load_map_snapshot(
                 0,
                 MapNode("pending-root", "root", "Scanner not yet recorded", (), "", 0, 0, 0),
             )
+        # Only the distance is recomputed; rebuilding the node positionally
+        # silently dropped every field added after `ttl_hops` (the note, the
+        # duplicate count), which is exactly the kind of bug a copy hides.
         nodes = [
-            MapNode(
-                n.id,
-                n.kind,
-                n.label,
-                n.addresses,
-                n.os_name,
-                n.open_ports,
-                n.review_count,
-                distances.get(n.id, 2 if n.kind != "root" else 0),
-                n.ports,
-                n.member_count,
-                n.assumed,
-                n.placeholder,
-                n.zone_id,
-                n.ttl_hops,
-            )
+            replace(n, distance=distances.get(n.id, 2 if n.kind != "root" else 0))
             for n in nodes
         ]
         # The bounded SQL picks nodes by kind and id (index-friendly); order the

@@ -41,6 +41,7 @@ Nmap progress flags are enabled for builds that support `--stats-every` (7.60 or
 | `,` | enumeration settings (engine checkboxes) |
 | `N` `P` `I` `R` `T` `!` | new engagement, scope, import XML, report, database tools, event log |
 | `?` `:` `/` | help, command palette, search |
+| `lumos note DB "text" --node ID` | attach a note to a node (`--list` to read them back; the sidebar shows the newest) |
 
 ### Engagements, hubs and paths
 

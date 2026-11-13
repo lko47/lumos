@@ -15,11 +15,11 @@ flowchart LR
     P0 -->|"1 imports"| P1
     P1 -->|"13 imports"| P2
     P1 -->|"2 imports"| P3
-    P1 -->|"2 imports"| P4
+    P1 -->|"3 imports"| P4
     P1 -->|"3 imports"| P5
     P2 -->|"7 imports"| P3
     P3 -->|"4 imports"| P2
-    P4 -->|"16 imports"| P2
+    P4 -->|"18 imports"| P2
     P4 -->|"2 imports"| P3
     P5 -->|"14 imports"| P2
     P5 -->|"12 imports"| P4
@@ -44,6 +44,7 @@ flowchart LR
 | `lumos.cli` | `lumos.core.xml_import` |
 | `lumos.cli` | `lumos.services` |
 | `lumos.cli` | `lumos.services.actions` |
+| `lumos.cli` | `lumos.services.notes` |
 | `lumos.cli` | `lumos.tui.app` |
 | `lumos.cli` | `lumos.tui.start` |
 | `lumos.core.nmap.iflist` | `lumos.core.text` |
@@ -75,6 +76,8 @@ flowchart LR
 | `lumos.services.map_view` | `lumos.core.database` |
 | `lumos.services.map_view` | `lumos.core.evidence` |
 | `lumos.services.map_view` | `lumos.core.text` |
+| `lumos.services.notes` | `lumos.core.database` |
+| `lumos.services.notes` | `lumos.core.text` |
 | `lumos.tui.app` | `lumos.core` |
 | `lumos.tui.app` | `lumos.core.decisions` |
 | `lumos.tui.app` | `lumos.core.engines` |

@@ -31,7 +31,7 @@ from .core.scan_store import ScanStoreError
 from .core.vantage_store import save_interfaces
 from .core.scope_store import add_scope_rule
 from .core.xml_import import import_nmap_xml
-from .services import actions
+from .services import actions, notes
 from .core import state as local_state
 
 AUTHORIZED_USE_NOTICE = "Authorized use only: scan systems and networks you own or are explicitly permitted to assess. Confirm scope and permissions before proceeding."
@@ -126,6 +126,14 @@ def _parser() -> argparse.ArgumentParser:
     tui = commands.add_parser("tui", help="open the interactive map (plain output when redirected)")
     tui.add_argument("database", type=Path, help="engagement database")
 
+    note = commands.add_parser("note", help="attach or list notes")
+    note.add_argument("database", type=Path)
+    note.add_argument("body", nargs="?", default="", help="note text (omit with --list)")
+    note.add_argument("--node", default="", help="topology node id")
+    note.add_argument("--edge", default="", help="topology edge id")
+    note.add_argument("--list", action="store_true", dest="list_notes")
+    note.add_argument("--operator", default=None)
+
     report = commands.add_parser("report", help="generate engagement reports")
     report_commands = report.add_subparsers(dest="report_format", required=True)
     markdown = report_commands.add_parser("markdown", help="write a Markdown report")
@@ -185,7 +193,9 @@ def _open_default(path: Path | None) -> int:
     return run_tui(database)
 
 
-SUBCOMMANDS = frozenset({"db", "scope", "interfaces", "scan", "import", "tui", "report"})
+SUBCOMMANDS = frozenset(
+    {"db", "scope", "interfaces", "scan", "import", "tui", "report", "note"}
+)
 
 
 def _run_engine_scan(args: argparse.Namespace) -> int:
@@ -225,6 +235,38 @@ def _print_progress(text: str) -> None:
         print(line, file=sys.stderr, flush=True)
 
 
+def _run_note(args: Any) -> int:
+    target_kind = "engagement"
+    target_id = ""
+    if args.node:
+        target_kind, target_id = "topology_node", args.node
+    elif args.edge:
+        target_kind, target_id = "topology_edge", args.edge
+    try:
+        if args.list_notes:
+            found = notes.notes_for(args.database, target_kind=target_kind if target_id else "",
+                                    target_id=target_id)
+            if not found:
+                print("no notes")
+                return 0
+            for note in found:
+                where = note.target_id or "engagement"
+                print(f"{note.updated_at}  {where:24}  {note.author}: {note.summary}")
+            return 0
+        if not args.body:
+            print("lumos: a note needs text (or use --list)", file=sys.stderr)
+            return 2
+        note = notes.add_note(
+            args.database, target_kind=target_kind, target_id=target_id,
+            body=args.body, author=args.operator or "operator",
+        )
+        print(f"note {note.id} on {note.target_id or 'engagement'}")
+        return 0
+    except notes.NoteError as exc:
+        print(f"lumos: {exc}", file=sys.stderr)
+        return 2
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     tokens = list(sys.argv[1:] if argv is None else argv)
     if tokens and not tokens[0].startswith("-") and tokens[0] not in SUBCOMMANDS:
@@ -238,6 +280,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command is None:
         return _open_default(None)
     try:
+        if args.command == "note":
+            return _run_note(args)
         if args.command == "interfaces":
             snapshot = discover_interfaces(args.nmap_executable)
             if args.json:
