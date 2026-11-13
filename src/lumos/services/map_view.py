@@ -156,7 +156,7 @@ def edge_class(edge: MapEdge) -> str:
     (dense dots), below that is "weak" (sparse dots). A guess can therefore
     never take a solid line.
     """
-    if edge.bridge or edge.edge_type == "shared":
+    if getattr(edge, "bridge", False) or edge.edge_type == "shared":
         return "shared"
     return classify(edge.edge_type, edge.confidence)
 
