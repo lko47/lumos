@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Sequence
 
 from . import __version__
+from .core import engine_scan
 from .core.inference import rebuild_inferred
 from .core.merge import MergeError, merge_engagement
 from .core.database import (
@@ -105,6 +106,12 @@ def _parser() -> argparse.ArgumentParser:
     scan.add_argument("--confirm-scope", default="", help="exact typed phrase shown for an out-of-scope override")
     scan.add_argument("--no-evidence", action="store_true", help="do not retain compressed raw XML evidence")
     scan.add_argument("--yes", action="store_true", help="confirm the displayed Nmap command without a prompt")
+    scan.add_argument(
+        "--engine", default="nmap",
+        help="enumerator to use: nmap (default) or masscan; masscan needs raw-socket privileges",
+    )
+    scan.add_argument("--engine-ports", default="", help="port list for a non-Nmap engine")
+    scan.add_argument("--engine-rate", type=int, default=1000, help="packets/second for a non-Nmap engine")
 
     xml_import = commands.add_parser("import", help="import Nmap XML into a named network")
     xml_import.add_argument("database", type=Path)
@@ -176,6 +183,31 @@ def _open_default(path: Path | None) -> int:
 
 
 SUBCOMMANDS = frozenset({"db", "scope", "interfaces", "scan", "import", "tui", "report"})
+
+
+def _run_engine_scan(args: argparse.Namespace) -> int:
+    """Run a non-Nmap enumerator over every requested target, one scan row each."""
+    total_hosts = 0
+    for target in args.targets:
+        try:
+            scan_id, hosts, _message = engine_scan.scan_with_engine(
+                args.database,
+                args.network,
+                args.engine,
+                target,
+                engine_scan.EngineOptions(
+                    ports=args.engine_ports,
+                    rate=args.engine_rate,
+                    operator=args.operator,
+                ),
+            )
+        except engine_scan.EngineScanError as exc:
+            print(f"{args.engine}: {exc}", file=sys.stderr)
+            return 1
+        total_hosts += hosts
+        print(f"Scan {scan_id}: completed; {hosts} host(s) via {args.engine}")
+    print(f"{args.engine}: {total_hosts} host(s) total")
+    return 0
 
 
 def _print_progress(text: str) -> None:
@@ -312,6 +344,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "scope" and args.scope_command == "show":
             return _scope_show(args.database)
+        if args.command == "scan" and args.engine != "nmap":
+            print(AUTHORIZED_USE_NOTICE, file=sys.stderr)
+            return _run_engine_scan(args)
         if args.command == "scan":
             print(AUTHORIZED_USE_NOTICE, file=sys.stderr)
             outcome = scan_database(

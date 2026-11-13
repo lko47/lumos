@@ -75,5 +75,37 @@ class EngineScanTests(unittest.TestCase):
         self.assertIn("no report", str(caught.exception))
 
 
+class CommandLineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.database = Path(self.tmp.name) / "cli.sqlite"
+        initialize_database(self.database, "cli test")
+        add_scope_rule(self.database, "lab", "192.0.2.0/24", included=True)
+        patcher = mock.patch.dict(
+            os.environ, {"PATH": f"{FAKE_DIR}{os.pathsep}{os.environ.get('PATH', '')}"}
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _args(self, target: str):
+        import argparse
+
+        return argparse.Namespace(
+            database=self.database, network="lab", engine="masscan", targets=[target],
+            engine_ports="22,443", engine_rate=500, operator="tester",
+        )
+
+    def test_engine_scan_command_reports_each_target(self) -> None:
+        from lumos import cli
+
+        self.assertEqual(cli._run_engine_scan(self._args("192.0.2.40")), 0)
+
+    def test_engine_scan_command_fails_outside_scope(self) -> None:
+        from lumos import cli
+
+        self.assertEqual(cli._run_engine_scan(self._args("203.0.113.5")), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

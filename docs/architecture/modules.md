@@ -13,7 +13,7 @@ flowchart LR
     P4["lumos.services"]
     P5["lumos.tui"]
     P0 -->|"1 imports"| P1
-    P1 -->|"11 imports"| P2
+    P1 -->|"13 imports"| P2
     P1 -->|"2 imports"| P3
     P1 -->|"2 imports"| P4
     P1 -->|"3 imports"| P5
@@ -30,6 +30,7 @@ flowchart LR
 | `lumos.__main__` | `lumos.cli` |
 | `lumos.cli` | `lumos.core` |
 | `lumos.cli` | `lumos.core.database` |
+| `lumos.cli` | `lumos.core.engine_scan` |
 | `lumos.cli` | `lumos.core.inference` |
 | `lumos.cli` | `lumos.core.merge` |
 | `lumos.cli` | `lumos.core.nmap.iflist` |
