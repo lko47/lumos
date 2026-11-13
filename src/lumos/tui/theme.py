@@ -171,13 +171,23 @@ def next_theme(current: str) -> str:
     return THEME_ORDER[(THEME_ORDER.index(current) + 1) % len(THEME_ORDER)]
 
 
+# Tokens used by the animated layer (packet dots, ripples, liveness strip).
+# A palette may name them explicitly; otherwise they are derived from an
+# existing token, so every theme — including mono — stays consistent without
+# duplicating colour choices.
+_DERIVED_STYLES = {"flow": "accent", "ripple": "muted", "pulse": "ok"}
+
+
 def resolved_styles(theme: str, capability: str) -> dict[str, tuple[int, int, int]]:
     """Resolve a theme to ``(fg, bg, attr)`` triples without touching curses.
 
     This is the testable core of the colour layer: 16-colour output never
     contains a 256-colour index, and monochrome output never sets one.
     """
-    palette = THEMES.get(theme, _AURORA)
+    palette = dict(THEMES.get(theme, _AURORA))
+    for name, source in _DERIVED_STYLES.items():
+        if name not in palette and source in palette:
+            palette[name] = palette[source]
     resolved: dict[str, tuple[int, int, int]] = {}
     for name, style in palette.items():
         if capability == CAPABILITY_MONO:

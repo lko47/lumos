@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import curses
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any, Callable
 
@@ -17,6 +19,10 @@ from .widgets import (
     remember_overlay,
     safe_addstr,
 )
+
+
+# Verbose scan output: a bounded tail, scrolled with PgUp/PgDn.
+SCAN_LOG_LINES = 200
 
 
 def _attr(styles: dict[str, int], name: str, default: int = 0) -> int:
@@ -394,10 +400,11 @@ def flow_scan(
 def _watch_scan(
     window: Any, styles: dict[str, int], unicode_ok: bool, job: actions.ScanJob
 ) -> actions.ActionResult:
-    lines: list[str] = []
+    lines: deque[str] = deque(maxlen=SCAN_LOG_LINES)
     command = ""
     outcome: actions.ActionResult | None = None
     confirm_cancel = False
+    scroll = 0
     window.timeout(150)
     try:
         while outcome is None:
@@ -405,10 +412,10 @@ def _watch_scan(
                 if kind == "command":
                     command = str(payload)
                 elif kind == "progress":
-                    text = str(payload).strip()
-                    if text:
-                        lines.extend(text.splitlines()[-2:])
-                        del lines[:-4]
+                    for text in str(payload).strip().splitlines():
+                        if text:
+                            lines.append(text)
+                            scroll = 0
                 elif kind == "done":
                     outcome = payload
             itop, ileft, ih, iw = _box(window, styles, unicode_ok, title="scanning", width=78, height=12)
@@ -433,7 +440,11 @@ def _watch_scan(
                     _attr(styles, "muted"), unicode_ok=unicode_ok,
                 )
             row = itop + 3
-            shown = lines[-4:] or ["Nmap is working; hosts appear when the XML lands."]
+            capacity = max(1, ih - 5)
+            tail = list(lines)
+            if scroll:
+                tail = tail[: max(0, len(tail) - scroll)]
+            shown = tail[-capacity:] or ["Nmap is working; hosts appear when the XML lands."]
             for line in shown:
                 if row >= itop + ih - 1:
                     break

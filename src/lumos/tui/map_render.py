@@ -8,6 +8,7 @@ from ..core.decisions import describe_edge
 from ..services.map_view import MapSnapshot, edge_class
 from .braille import BrailleCanvas
 from .layout import compute_layout
+from . import animation
 from . import mouse
 from .widgets import (
     clip,
@@ -233,6 +234,9 @@ def draw_map_panel(
             safe_addstr(window, itop + row, ileft + x, text, max(1, iw - x),
                         _attr(styles, f"edge_{edge_type}"), unicode_ok=unicode_ok)
 
+    _draw_flow_dots(window, snapshot, state, projected, styles, (itop, ileft, ih, iw), unicode_ok)
+    _draw_ripples(window, state, projected, styles, (itop, ileft, ih, iw), unicode_ok)
+
     selected_node = snapshot.nodes[state.selected] if (
         state.selected_kind == "node" and 0 <= state.selected < len(snapshot.nodes)
     ) else None
@@ -294,6 +298,64 @@ def draw_map_panel(
         safe_addstr(window, itop, ileft, f"No nodes yet {dash(unicode_ok)} run a scan with the CLI.", iw,
                     _attr(styles, "muted"), unicode_ok=unicode_ok)
     return projected, (itop, ileft, ih, iw)
+
+
+# Links whose direction was measured.  Inferred, manual and imported links are
+# never animated: motion is a claim about measured direction.
+_FLOW_EDGE_TYPES = frozenset({"traceroute", "observed"})
+
+
+def _draw_flow_dots(
+    window: Any,
+    snapshot: Any,
+    state: Any,
+    projected: dict[str, tuple[int, int]],
+    styles: dict[str, int],
+    rect: tuple[int, int, int, int],
+    unicode_ok: bool,
+) -> None:
+    """One slow dot per measured link, travelling from -> to (hop order)."""
+    if not state.animation:
+        return
+    itop, ileft, ih, iw = rect
+    glyph = animation.FLOW_GLYPH if unicode_ok else animation.FLOW_GLYPH_ASCII
+    for edge in snapshot.edges:
+        if edge.derived or edge.edge_type not in _FLOW_EDGE_TYPES:
+            continue
+        start = projected.get(edge.from_node_id)
+        end = projected.get(edge.to_node_id)
+        if start is None or end is None or not animation.flow_visible(start, end, state.now):
+            continue
+        x, y = animation.flow_position(start, end, animation.phase_for(edge.id), state.now)
+        if 0 <= x < iw and 0 <= y < ih:
+            safe_addstr(window, itop + y, ileft + x, glyph, 1,
+                        _attr(styles, "flow"), unicode_ok=unicode_ok)
+
+
+def _draw_ripples(
+    window: Any,
+    state: Any,
+    projected: dict[str, tuple[int, int]],
+    styles: dict[str, int],
+    rect: tuple[int, int, int, int],
+    unicode_ok: bool,
+) -> None:
+    """Expanding rings around nodes discovered in the latest snapshot."""
+    if not state.animation or not state.ripples:
+        return
+    itop, ileft, ih, iw = rect
+    for node_id, started_at in state.ripples.items():
+        point = projected.get(node_id)
+        if point is None:
+            continue
+        radius = animation.ripple_radius(started_at, state.now)
+        if radius < 0:
+            continue
+        glyph = animation.ripple_glyph(radius, unicode_ok)
+        for x, y in animation.ripple_cells(point, radius):
+            if 0 <= x < iw and 0 <= y < ih:
+                safe_addstr(window, itop + y, ileft + x, glyph, 1,
+                            _attr(styles, "ripple"), unicode_ok=unicode_ok)
 
 
 def _wrap_ports(ports: Iterable[str], width: int) -> list[str]:

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import curses
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 import textwrap
 
+from . import animation
 from . import mouse
 from .widgets import (
     clear_overlays,
@@ -484,6 +486,42 @@ def _draw_button(
     return 3
 
 
+def _scope_toggle(primed: bool) -> tuple[bool, float]:
+    """Flip the acknowledgement and start (or clear) the blink clock."""
+    primed = not primed
+    return primed, time.monotonic() if primed else 0.0
+
+
+def _blink_timeout(primed: bool, primed_at: float, now: float) -> int:
+    """Poll fast while the button blinks, then block waiting for a key."""
+    if not primed:
+        return -1
+    settled = primed_at + animation.BLINK_CYCLES * (
+        animation.BLINK_ON_SECONDS + animation.BLINK_OFF_SECONDS
+    )
+    return 120 if now < settled else -1
+
+
+def _scope_mouse(
+    action: dict[str, Any] | None,
+    primed: bool,
+) -> tuple[str, bool, str]:
+    """Resolve a click in the confirmation dialog.
+
+    Returns ``(decision, primed, message)`` where decision is ``confirm``,
+    ``cancel`` or ``none``.
+    """
+    kind = str((action or {}).get("kind", ""))
+    if kind == "checkbox":
+        primed, _started = _scope_toggle(primed)
+        return "none", primed, ""
+    if kind == "button":
+        if primed:
+            return "confirm", primed, ""
+        return "none", primed, "prime the checkbox first"
+    return "none", primed, ""
+
+
 def confirm_scope(
     window: Any,
     styles: dict[str, int],
@@ -507,6 +545,7 @@ def confirm_scope(
     info = [line for text in lines for line in _wrap(text, inner, max_lines=3)]
     box_height = min(len(info) + 9, max(MIN_MODAL_HEIGHT, height - 2))
     primed = False
+    primed_at = 0.0
     shown = ""
     while True:
         clear_overlays(window)
@@ -535,8 +574,10 @@ def confirm_scope(
         row += 2
         button_width = max(22, min(iw - 2, len(label) + 12))
         button_left = ileft + max(0, (iw - button_width) // 2)
+        now = time.monotonic()
+        filled = primed and animation.blink_visible(primed_at, now)
         _draw_button(
-            window, styles, unicode_ok, (row, button_left, button_width), label, primed
+            window, styles, unicode_ok, (row, button_left, button_width), label, filled
         )
         hint_row = itop + ih - 1
         safe_addstr(
@@ -546,23 +587,22 @@ def confirm_scope(
             unicode_ok=unicode_ok,
         )
         window.refresh()
-        window.timeout(-1)
+        window.timeout(_blink_timeout(primed, primed_at, now))
         key = window.getch()
+        if key == -1:
+            continue
         if mouse.is_mouse(key):
             _event, action = mouse.read_action(window)
-            kind = str((action or {}).get("kind", ""))
-            if kind == "checkbox":
-                primed = not primed
-                shown = ""
-            elif kind == "button":
-                if primed:
-                    return True
-                shown = "prime the checkbox first"
+            decision, primed, message = _scope_mouse(action, primed)
+            if decision == "confirm":
+                return True
+            if message:
+                shown = message
             continue
         if key in (27, ord("q")):
             return False
         if key in (ord(" "), ord("c"), ord("C")):
-            primed = not primed
+            primed, primed_at = _scope_toggle(primed)
             shown = ""
             continue
         if key in (10, 13, curses.KEY_ENTER):

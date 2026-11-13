@@ -10,6 +10,7 @@ from typing import Any
 from ..core.text import sanitize_text
 from ..services.map_view import MapSnapshot
 from .layout import Viewport
+from . import animation
 from .map_render import draw_map_panel, draw_sidebar
 from . import mouse
 from .widgets import (
@@ -58,6 +59,15 @@ class ViewState:
     expanded_zone: str = ""
     drag_origin: tuple[int, int] | None = None
     drag_distance: int = 0
+    # Animation: a pure function of `now`, plus the events that drive it.
+    now: float = 0.0
+    animation: bool = True
+    ripples: dict[str, float] = field(default_factory=dict)
+    known_nodes: set[str] = field(default_factory=set)
+    pulse: list[int] = field(default_factory=list)
+    pulse_at: float = 0.0
+    pulse_last: int = 0
+    pulse_counter: int = 0
 
     def notify(self, text: str, seconds: float = 4.0) -> None:
         self.message = sanitize_text(text, max_chars=160)
@@ -100,6 +110,7 @@ HINTS = (
     ("+/-", "zoom", "+"),
     ("arrows/drag", "pan", "H"),
     ("0", "reset", "0"),
+    ("a", "motion", "a"),
     ("o/O", "hub", "o"),
     ("N", "new", "N"),
     ("S", "scan", "S"),
@@ -185,17 +196,36 @@ def draw_footer(
         safe_addstr(window, height - 2, 1, clip(text, width - 2, unicode_ok=unicode_ok), width - 2,
                     attr(styles, "muted"), unicode_ok=unicode_ok)
 
-    hints = (
-        ("q", "quit"), ("?", "help"), (":", "palette"), ("m", "map"), ("v", "hosts"),
-        ("s", "scans"), ("/", "search"), ("t", "theme"), ("+/-", "zoom"), ("HJKL", "pan"),
-        ("0", "reset"), ("o/O", "hub"), ("N", "new"), ("S", "scan"), ("T", "tools"),
-    )
+    # The liveness strip owns the right edge of the hint row, so hints stop
+    # short of it and the two never overlap.
+    strip_width = min(animation.PULSE_WIDTH, max(0, width // 4))
     x = 1
-    for key, text in hints:
-        if x >= width - 2:
+    for label, text, key in HINTS:
+        if x >= width - strip_width - 4:
             break
-        x += key_hint(window, height - 1, x, width - x - 1, key, text, styles,
-                     unicode_ok=unicode_ok) + 1
+        span = display_width(label) + display_width(text) + 3
+        mouse.add(height - 1, x, 1, min(span, max(1, width - 2 - x)),
+                  {"kind": "key", "value": key})
+        x += key_hint(window, height - 1, x, width - x - 1, label, text, styles,
+                      unicode_ok=unicode_ok) + 1
+    _draw_pulse(window, state, styles, height - 1, width, strip_width, unicode_ok)
+
+
+def _draw_pulse(
+    window: Any,
+    state: ViewState,
+    styles: dict[str, int],
+    row: int,
+    width: int,
+    strip_width: int,
+    unicode_ok: bool,
+) -> None:
+    """Draw the liveness strip: one column per second of real event deltas."""
+    if strip_width < 4:
+        return
+    text = animation.pulse_row(state.pulse, width=strip_width, ascii_ok=not unicode_ok)
+    safe_addstr(window, row, width - strip_width - 1, text, strip_width,
+                attr(styles, "pulse"), unicode_ok=unicode_ok)
 
 
 def _too_small(window: Any, styles: dict[str, int], unicode_ok: bool, width: int) -> FrameLayout:

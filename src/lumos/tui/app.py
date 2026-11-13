@@ -9,6 +9,7 @@ import os
 import signal
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from ..services import actions
 from ..services.map_view import MapSnapshot, MapSnapshotWatcher, load_map_snapshot, render_plain_snapshot
 from . import theme
 from . import flows
+from . import animation
 from . import mouse
 from .overlays import draw_help, draw_palette
 from .widgets import set_backdrop
@@ -159,6 +161,61 @@ def _search(snapshot: MapSnapshot, query: str) -> int | None:
     return None
 
 
+@dataclass(frozen=True)
+class UiContext:
+    """Everything a key handler needs that is not per-frame state."""
+
+    window: Any
+    database: Path
+    styles: dict[str, int]
+    theme_name: str
+    capability: str
+    unicode_ok: bool
+    activity: actions.ActivityLog
+
+
+# Keys that open a writable flow; the value is the actions.py command name.
+_ACTION_KEYS = {
+    ord("N"): "new",
+    ord("P"): "scope",
+    ord("S"): "scan",
+    ord("I"): "import",
+    ord("R"): "report",
+    ord("T"): "tools",
+    ord("!"): "log",
+}
+
+
+def _dispatch_action(
+    ctx: UiContext,
+    watcher: MapSnapshotWatcher,
+    state: ViewState,
+    snapshot: MapSnapshot,
+    action: str,
+) -> Path | None:
+    """Run one flow and refresh the map; returns a database path to switch to."""
+    switched = _run_command(
+        action,
+        ctx.window,
+        ctx.database,
+        state,
+        snapshot,
+        ctx.styles,
+        ctx.theme_name,
+        ctx.capability,
+        ctx.unicode_ok,
+        ctx.activity,
+    )
+    if switched is not None:
+        return switched
+    try:
+        watcher.expanded_zone = state.expanded_zone
+        watcher.reload_now()
+    except Exception:  # keep the last good snapshot
+        pass
+    return None
+
+
 def _mouse_key(
     window: Any,
     state: ViewState,
@@ -273,6 +330,35 @@ def _click(state: ViewState, event: "mouse.MouseEvent") -> int | None:
         value = str(action.get("value", ""))
         return ord(value[0]) if value else None
     return None
+
+
+def _track_discovery(state: ViewState, snapshot: MapSnapshot) -> None:
+    """Start a ripple for every node that appeared in this snapshot.
+
+    The first snapshot is baseline, not news: a 1000-host engagement must not
+    ripple on open.  A sweep that adds more than the storm limit is reported by
+    the map itself and animates nothing.
+    """
+    ids = {node.id for node in snapshot.nodes}
+    added = ids - state.known_nodes
+    if state.known_nodes and added and not animation.storm(len(added)):
+        for node_id in list(added)[: animation.RIPPLE_MAX_ACTIVE]:
+            state.ripples[node_id] = state.now
+    state.known_nodes = ids
+    for node_id, started_at in list(state.ripples.items()):
+        if animation.ripple_radius(started_at, state.now) < 0:
+            del state.ripples[node_id]
+
+
+def _sample_pulse(state: ViewState) -> None:
+    """Append one liveness sample per second from a real event counter."""
+    if state.now - state.pulse_at < animation.IDLE_SECONDS:
+        return
+    state.pulse_at = state.now
+    delta = max(0, state.pulse_counter - state.pulse_last)
+    state.pulse_last = state.pulse_counter
+    state.pulse.append(delta)
+    del state.pulse[:-animation.PULSE_WIDTH * 2]
 
 
 def _draw_frame(
@@ -438,9 +524,10 @@ def _run_curses(window: Any, database: Path) -> None:
         watcher = MapSnapshotWatcher(path, interval=1.0)
         watcher.start()
         try:
-            switched = _run_event_loop(
-                window, path, watcher, unicode_ok, styles, theme_name, capability, activity
+            context = UiContext(
+                window, path, styles, theme_name, capability, unicode_ok, activity
             )
+            switched = _run_event_loop(context, watcher)
         finally:
             watcher.stop()
         if switched is None:
@@ -451,16 +538,10 @@ def _run_curses(window: Any, database: Path) -> None:
         window.timeout(1000)
 
 
-def _run_event_loop(
-    window: Any,
-    database: Path,
-    watcher: MapSnapshotWatcher,
-    unicode_ok: bool,
-    styles: dict[str, int],
-    theme_name: str,
-    capability: str,
-    activity: actions.ActivityLog,
-) -> Path | None:
+def _run_event_loop(ctx: UiContext, watcher: MapSnapshotWatcher) -> Path | None:
+    window, database = ctx.window, ctx.database
+    styles, unicode_ok = ctx.styles, ctx.unicode_ok
+    theme_name, capability = ctx.theme_name, ctx.capability
     snapshot = watcher.prime()
     if snapshot is None:
         if watcher.error is not None:
@@ -477,20 +558,23 @@ def _run_event_loop(
             window,
             lambda: _draw_frame(window, snapshot, state, styles, unicode_ok, theme_name, capability),
         )
+        state.now = time.monotonic()
+        _track_discovery(state, snapshot)
+        _sample_pulse(state)
         if dirty:
             layout = _draw_frame(window, snapshot, state, styles, unicode_ok, theme_name, capability)
             dirty = False
         # Animate only while something is actually moving, and poll quickly
         # while the watcher is rebuilding a snapshot the UI asked for.
-        if snapshot.active_scans or state.notify_active() or watcher.pending:
-            window.timeout(250)
+        animating = state.animation and bool(state.ripples or snapshot.active_scans)
+        window.timeout(animation.tick_timeout(animating or state.notify_active()))
+        if animating or state.notify_active() or watcher.pending:
             dirty = True
-        else:
-            window.timeout(1000)
         key = window.getch()
         updated = watcher.take_latest()
         if updated is not None:
             snapshot = updated
+            state.pulse_counter += 1
             _clamp_selection(state, snapshot)
             dirty = True
         if key == -1:
@@ -502,6 +586,7 @@ def _run_event_loop(
                 _clamp_selection(state, snapshot)
                 continue
         dirty = True
+        state.pulse_counter += 1
         if key == curses.KEY_RESIZE:
             window.clearok(True)
             dirty = True
@@ -512,35 +597,10 @@ def _run_event_loop(
             _show_help(window, snapshot, state, styles, unicode_ok, theme_name, capability)
             dirty = True
             continue
-        if key in (ord("N"), ord("P"), ord("S"), ord("I"), ord("R"), ord("T"), ord("!")):
-            action_name = {
-                ord("N"): "new",
-                ord("P"): "scope",
-                ord("S"): "scan",
-                ord("I"): "import",
-                ord("R"): "report",
-                ord("T"): "tools",
-                ord("!"): "log",
-            }[key]
-            switched = _run_command(
-                action_name,
-                window,
-                database,
-                state,
-                snapshot,
-                styles,
-                theme_name,
-                capability,
-                unicode_ok,
-                activity,
-            )
+        if key in _ACTION_KEYS:
+            switched = _dispatch_action(ctx, watcher, state, snapshot, _ACTION_KEYS[key])
             if switched is not None:
                 return switched
-            try:
-                watcher.expanded_zone = state.expanded_zone
-                watcher.reload_now()
-            except Exception:  # keep the last good snapshot
-                pass
             dirty = True
             continue
 
@@ -558,6 +618,10 @@ def _run_event_loop(
                 state.selected = found
                 _set_view(state, "map")
             dirty = True
+        elif key == ord("a"):
+            state.animation = not state.animation
+            state.ripples.clear()
+            state.notify(f"motion {'on' if state.animation else 'off'}")
         elif key in (ord("m"), ord("v"), ord("s")):
             _set_view(state, {ord("m"): "map", ord("v"): "hosts", ord("s"): "scans"}[key])
         elif key == 9:  # Tab cycles the three views.
