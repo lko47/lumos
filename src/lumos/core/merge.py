@@ -16,8 +16,15 @@ from pathlib import Path
 from typing import Iterable
 
 from . import ids
-from .database import DatabaseError, open_database, utc_now
+from .database import (
+    EXPECTED_TABLES,
+    EXPECTED_VIEWS,
+    DatabaseError,
+    open_database,
+    utc_now,
+)
 from .inference import rebuild_inferred
+from .schema import APPLICATION_ID, SCHEMA_VERSION
 from .text import sanitize_text
 
 # Parents before children, so foreign keys hold at every step.
@@ -166,6 +173,56 @@ def _copy_rows(
     return rows
 
 
+def _source_schema_problem(source: sqlite3.Connection, target: sqlite3.Connection) -> str:
+    """Return why ``source`` cannot be merged, or an empty string.
+
+    A merge only ever copies rows; it never migrates. A source with a different
+    application id, schema version, table/view set or column layout is therefore
+    refused instead of being silently narrowed by the column intersection in
+    :func:`_copy_rows`.
+    """
+    app_id = int(source.execute("PRAGMA application_id").fetchone()[0])
+    if app_id != APPLICATION_ID:
+        return f"Source application_id {app_id} is not Lumos ({APPLICATION_ID})"
+    version = int(source.execute("PRAGMA user_version").fetchone()[0])
+    if version != SCHEMA_VERSION:
+        return f"Source schema version {version} is not the supported {SCHEMA_VERSION}"
+    objects = source.execute(
+        "SELECT type, name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'"
+    ).fetchall()
+    tables = {row[1] for row in objects if row[0] == "table"}
+    views = {row[1] for row in objects if row[0] == "view"}
+    triggers = sorted(row[1] for row in objects if row[0] == "trigger")
+    virtual_tables = sorted(
+        row[1]
+        for row in objects
+        if row[0] == "table"
+        and row[2]
+        and str(row[2]).lstrip().upper().startswith("CREATE VIRTUAL TABLE")
+    )
+    if triggers:
+        return f"Source has unexpected triggers: {', '.join(triggers)}"
+    if virtual_tables:
+        return f"Source has unexpected virtual tables: {', '.join(virtual_tables)}"
+    if tables != EXPECTED_TABLES:
+        missing = sorted(EXPECTED_TABLES - tables)
+        extra = sorted(tables - EXPECTED_TABLES)
+        return f"Source table set differs (missing={missing}, extra={extra})"
+    if views != EXPECTED_VIEWS:
+        missing = sorted(EXPECTED_VIEWS - views)
+        extra = sorted(views - EXPECTED_VIEWS)
+        return f"Source view set differs (missing={missing}, extra={extra})"
+    for table in sorted(EXPECTED_TABLES):
+        source_columns = _columns(source, "main", table)
+        target_columns = _columns(target, "main", table)
+        if source_columns != target_columns:
+            return (
+                f"Source columns differ for {table}: "
+                f"source={source_columns}, target={target_columns}"
+            )
+    return ""
+
+
 def merge_engagement(
     target_path: str | Path,
     source_path: str | Path,
@@ -193,6 +250,25 @@ def merge_engagement(
             target_uid = ids.ensure_engagement_uid(target)
             source_app_id = int(source.execute("PRAGMA application_id").fetchone()[0])
             source_version = int(source.execute("PRAGMA user_version").fetchone()[0])
+            source.execute("PRAGMA trusted_schema = OFF")
+            schema_problem = _source_schema_problem(source, target)
+            if schema_problem:
+                if not dry_run:
+                    with target:
+                        _log(
+                            target,
+                            engagement_id=engagement_id,
+                            source_label=str(source_file),
+                            source_application_id=source_app_id,
+                            source_user_version=source_version,
+                            source_uid="",
+                            dry_run=False,
+                            operator=operator,
+                            outcome="rejected",
+                            stats={},
+                            reason=schema_problem,
+                        )
+                raise MergeError(schema_problem)
             try:
                 source_uid = ids.read_engagement_uid(source)
             except (ValueError, sqlite3.Error) as exc:

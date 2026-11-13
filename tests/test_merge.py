@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -99,3 +100,53 @@ class MergeTests(unittest.TestCase):
             )
         finally:
             conn.close()
+
+    def merge_outcomes(self) -> list[str]:
+        conn = open_database(self.scan.db, readonly=True)
+        try:
+            return [row[0] for row in conn.execute("SELECT outcome FROM merge_log ORDER BY rowid")]
+        finally:
+            conn.close()
+
+    def mutated_copy(self, name: str, *statements: str) -> Path:
+        copy = self.dir / name
+        shutil.copyfile(self.scan.db, copy)
+        conn = sqlite3.connect(copy)
+        try:
+            for statement in statements:
+                conn.execute(statement)
+            conn.commit()
+        finally:
+            conn.close()
+        return copy
+
+    def test_source_with_a_newer_schema_version_is_rejected_and_logged(self) -> None:
+        copy = self.mutated_copy("newer.sqlite", "PRAGMA user_version = 99")
+        with self.assertRaisesRegex(MergeError, "schema version 99"):
+            merge_engagement(self.scan.db, copy)
+        self.assertEqual(self.merge_outcomes(), ["rejected"])
+
+    def test_source_with_a_foreign_application_id_is_rejected_and_logged(self) -> None:
+        copy = self.mutated_copy("foreign.sqlite", "PRAGMA application_id = 1234")
+        with self.assertRaisesRegex(MergeError, "application_id"):
+            merge_engagement(self.scan.db, copy)
+        self.assertEqual(self.merge_outcomes(), ["rejected"])
+
+    def test_source_with_an_extra_column_is_rejected_instead_of_narrowed(self) -> None:
+        copy = self.mutated_copy(
+            "extra-column.sqlite", "ALTER TABLE networks ADD COLUMN secret_note TEXT"
+        )
+        with self.assertRaisesRegex(MergeError, "columns differ for networks"):
+            merge_engagement(self.scan.db, copy)
+        self.assertEqual(self.merge_outcomes(), ["rejected"])
+
+    def test_source_with_an_extra_table_or_trigger_is_rejected(self) -> None:
+        copy = self.mutated_copy("extra-table.sqlite", "CREATE TABLE smuggled (x INTEGER)")
+        with self.assertRaisesRegex(MergeError, "table set differs"):
+            merge_engagement(self.scan.db, copy)
+        copy = self.mutated_copy(
+            "trigger.sqlite",
+            "CREATE TRIGGER hostile AFTER INSERT ON notes BEGIN SELECT 1; END",
+        )
+        with self.assertRaisesRegex(MergeError, "triggers"):
+            merge_engagement(self.scan.db, copy)
