@@ -35,6 +35,7 @@ class MapNode:
     placeholder: bool = False
     zone_id: str = ""
     note: str = ""
+    tags: tuple[str, ...] = ()
     ttl_hops: int | None = None
     duplicate_count: int = 1
     source_tag: str = ""
@@ -279,6 +280,10 @@ def load_map_snapshot(
                       COALESCE(a.addresses, '') AS addresses,
                       COALESCE(pc.open_ports, 0) AS open_ports,
                       COALESCE(ha.display_value, '') AS hop_address,
+                      COALESCE((SELECT group_concat(t.name, ', ') FROM tags t
+                                JOIN tag_links l ON l.tag_id = t.id
+                                WHERE l.object_kind = 'topology_node' AND l.object_id = tn.id),
+                               '') AS tag_names,
                       COALESCE((SELECT substr(n.body_markdown, 1, 80) FROM notes n
                                 WHERE n.target_kind = 'topology_node' AND n.target_id = tn.id
                                 ORDER BY n.updated_at DESC, n.id DESC LIMIT 1), '') AS note,
@@ -387,6 +392,11 @@ def load_map_snapshot(
                     and str(row["entity_id"] or "").startswith("gateway:"),
                     zone_id=str(row["entity_id"] or "") if kind == "zone" else "",
                     note=str(row["note"] or ""),
+                    tags=tuple(
+                        sanitize_text(item, max_chars=40)
+                        for item in str(row["tag_names"] or "").split(", ")
+                        if item
+                    )[:12],
                     ttl_hops=ttl_hops(row["reason_ttl"]),
                 )
             )

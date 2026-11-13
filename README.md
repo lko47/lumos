@@ -33,7 +33,7 @@ Nmap progress flags are enabled for builds that support `--stats-every` (7.60 or
 | click / `Enter` | select a node, edge, row or field |
 | `o` / `O` | toggle the selected hub / collapse every hub |
 | `[ set start ]` `[ set end ]` | click the sidebar buttons to mark a path |
-| `b` | note on the selected node |
+| `b` / `y` | note / tags on the selected node |
 | `a` | motion on/off (dots, ripples, solid links) |
 | `+` `-` `0` | zoom in, zoom out, recentre |
 | arrows, `HJKL`, drag, wheel | pan, and zoom at the pointer |
@@ -43,6 +43,7 @@ Nmap progress flags are enabled for builds that support `--stats-every` (7.60 or
 | `N` `P` `I` `R` `T` `!` | new engagement, scope, import XML, report, database tools, event log |
 | `?` `:` `/` | help, command palette, search |
 | `lumos note DB "text" --node ID` | attach a note to a node (`--list` to read them back; the sidebar shows the newest) |
+| `lumos tag DB dmz --node ID` | tag a node (`--list`, `--remove`) |
 | `lumos compare DB` | diff the last two completed scans (`--from`/`--to` take an id or a unique prefix, `--list` shows them) |
 
 ### Engagements, hubs and paths

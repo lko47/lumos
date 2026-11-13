@@ -31,7 +31,7 @@ from .core.scan_store import ScanStoreError
 from .core.vantage_store import save_interfaces
 from .core.scope_store import add_scope_rule
 from .core.xml_import import import_nmap_xml
-from .services import actions, compare, notes
+from .services import actions, compare, notes, tags
 from .core import state as local_state
 
 AUTHORIZED_USE_NOTICE = "Authorized use only: scan systems and networks you own or are explicitly permitted to assess. Confirm scope and permissions before proceeding."
@@ -133,6 +133,15 @@ def _parser() -> argparse.ArgumentParser:
     compare_cmd.add_argument("--list", action="store_true", dest="list_scans",
                              help="list completed scans")
 
+    tag_cmd = commands.add_parser("tag", help="attach, list or remove tags")
+    tag_cmd.add_argument("database", type=Path)
+    tag_cmd.add_argument("names", nargs="*", help="tag names")
+    tag_cmd.add_argument("--node", default="", help="topology node id")
+    tag_cmd.add_argument("--edge", default="", help="topology edge id")
+    tag_cmd.add_argument("--list", action="store_true", dest="list_tags")
+    tag_cmd.add_argument("--remove", action="store_true", dest="remove_tags")
+    tag_cmd.add_argument("--operator", default=None)
+
     note = commands.add_parser("note", help="attach or list notes")
     note.add_argument("database", type=Path)
     note.add_argument("body", nargs="?", default="", help="note text (omit with --list)")
@@ -201,7 +210,7 @@ def _open_default(path: Path | None) -> int:
 
 
 SUBCOMMANDS = frozenset(
-    {"db", "scope", "interfaces", "scan", "import", "tui", "report", "note", "compare"}
+    {"db", "scope", "interfaces", "scan", "import", "tui", "report", "note", "compare", "tag"}
 )
 
 
@@ -240,6 +249,46 @@ def _print_progress(text: str) -> None:
     line = text.rstrip()
     if line:
         print(line, file=sys.stderr, flush=True)
+
+
+def _run_tag(args: Any) -> int:
+    target_kind = "engagement"
+    target_id = ""
+    if args.node:
+        target_kind, target_id = "topology_node", args.node
+    elif args.edge:
+        target_kind, target_id = "topology_edge", args.edge
+    try:
+        if args.list_tags:
+            found = (
+                tags.tags_for(args.database, target_kind, target_id) if target_id
+                else tags.all_tags(args.database)
+            )
+            if not found:
+                print("no tags")
+                return 0
+            for tag in found:
+                print(f"{tag.name}" + (f"  ({tag.count})" if tag.count else ""))
+            return 0
+        if not args.names:
+            print("lumos: give at least one tag name", file=sys.stderr)
+            return 2
+        for name in args.names:
+            if args.remove_tags:
+                gone = tags.remove_tag(
+                    args.database, name=name, object_kind=target_kind, object_id=target_id
+                )
+                print(f"{'removed' if gone else 'not attached'}: {name}")
+            else:
+                tag = tags.add_tag(
+                    args.database, name=name, object_kind=target_kind,
+                    object_id=target_id, author=args.operator or "operator",
+                )
+                print(f"tagged {target_id or 'engagement'}: {tag.name}")
+        return 0
+    except tags.TagError as exc:
+        print(f"lumos: {exc}", file=sys.stderr)
+        return 2
 
 
 def _run_compare(args: Any) -> int:
@@ -312,6 +361,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "compare":
             return _run_compare(args)
+        if args.command == "tag":
+            return _run_tag(args)
         if args.command == "note":
             return _run_note(args)
         if args.command == "interfaces":

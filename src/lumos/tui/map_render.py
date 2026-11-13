@@ -616,7 +616,10 @@ def draw_sidebar(
     field(row + 2, "depth", str(node.distance))
     if node.ttl_hops is not None:
         field(row + 3, "about", f"{node.ttl_hops} hop(s) by TTL")
+    tags = getattr(node, "tags", ())
+    if tags:
+        line(row + 5, f"tags: {', '.join(tags)}", "accent")
     note = getattr(node, "note", "")
     if note:
-        line(row + 5, f"note: {note}", "muted")
+        line(row + 6, f"note: {note}", "muted")
     _draw_path_buttons(window, styles, unicode_ok, state, (itop, ileft, ih, iw))

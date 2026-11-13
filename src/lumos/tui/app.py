@@ -18,7 +18,7 @@ from ..core.decisions import DecisionError, record_decision
 from ..core.text import sanitize_text
 from ..services import actions
 from ..services.map_view import MapSnapshot, MapSnapshotWatcher, load_map_snapshot, render_plain_snapshot
-from ..services import notes, workspace, path_view
+from ..services import notes, tags, workspace, path_view
 from ..core import engines
 from . import theme
 from . import flows
@@ -359,6 +359,42 @@ def _note_on_selection(
         return False
     state.notify("note saved")
     return True
+
+
+def _tag_on_selection(
+    window: Any,
+    styles: dict[str, int],
+    unicode_ok: bool,
+    database: Path,
+    state: ViewState,
+    snapshot: MapSnapshot,
+) -> bool:
+    """Prompt for one or more tags on the selected node; True to reload."""
+    if state.selected_kind != "node" or not (0 <= state.selected < len(snapshot.nodes)):
+        state.notify("select a node first")
+        return False
+    node = snapshot.nodes[state.selected]
+    answer = forms.text_prompt(
+        window, styles, unicode_ok, f"tags for {node.label}",
+        forms.PromptOptions(note="Comma separated, for example: dmz, jump-host", max_chars=200),
+    )
+    if not answer:
+        return False
+    applied = 0
+    for name in answer.split(","):
+        if not name.strip():
+            continue
+        try:
+            tags.add_tag(
+                database, name=name.strip(), object_kind="topology_node", object_id=node.id,
+                author=actions.default_operator(),
+            )
+            applied += 1
+        except tags.TagError as exc:
+            state.notify(str(exc))
+    if applied:
+        state.notify(f"{applied} tag(s) on {node.label}" if applied > 1 else f"tagged {node.label}")
+    return bool(applied)
 
 
 def _refresh_path(state: ViewState, snapshot: MapSnapshot) -> None:
@@ -859,6 +895,10 @@ def _run_event_loop(ctx: UiContext, watcher: MapSnapshotWatcher) -> Path | None:
             theme_name = _cycle_theme(theme_name, capability)
             styles = theme.init_styles(theme_name, capability)
             state.notify(f"theme {theme_name} — {theme.THEME_DESCRIPTIONS.get(theme_name, '')}")
+        elif key == ord("y"):
+            if _tag_on_selection(window, styles, unicode_ok, database, state, snapshot):
+                watcher.reload_now()
+            dirty = True
         elif key == ord("b"):
             if _note_on_selection(window, styles, unicode_ok, database, state, snapshot):
                 watcher.reload_now()
