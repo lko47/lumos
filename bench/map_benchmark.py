@@ -7,7 +7,8 @@ deterministic ids as the application, then measures:
 * how long it takes to build the fixture (bulk SQL, not the Nmap writer),
 * the database file size,
 * ``load_map_snapshot`` with the TUI default bound and unbounded,
-* one full TUI frame per screen at 110x32.
+* one full TUI frame per screen at 110x32,
+* ``rebuild_inferred``, the synchronous post-scan/import inference pass.
 
 Traced hosts get a traceroute link from the scanner root; the rest get the
 marked ``inferred`` link, so both edge styles are exercised.
@@ -30,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from lumos.core import ids  # noqa: E402
 from lumos.core.database import initialize_database, open_database, utc_now  # noqa: E402
+from lumos.core.inference import rebuild_inferred  # noqa: E402
 from lumos.services.map_view import load_map_snapshot  # noqa: E402
 from lumos.tui import render, theme  # noqa: E402
 
@@ -262,6 +264,12 @@ def measure(hosts: int) -> dict[str, object]:
             render.draw_footer(window, bounded, state, styles, True, 0.0)
 
         frame_seconds, _ = timed(frame, 5)
+        # The post-scan inference pass runs synchronously in the caller of
+        # rebuild_inferred (the scan/import worker, or a maintenance action),
+        # so its cost belongs in the scale report next to load and frame.
+        rebuild_started = time.perf_counter()
+        rebuild_stats = rebuild_inferred(path)
+        rebuild_seconds = time.perf_counter() - rebuild_started
         return {
             "hosts": hosts,
             "build_s": build_seconds,
@@ -273,6 +281,9 @@ def measure(hosts: int) -> dict[str, object]:
             "full_nodes": len(full.nodes),
             "frame_ms": frame_seconds * 1000,
             "edges": len(full.edges),
+            "rebuild_ms": rebuild_seconds * 1000,
+            "rebuild_hubs": rebuild_stats.hubs,
+            "rebuild_edges": rebuild_stats.edges,
         }
     finally:
         tmp.cleanup()
@@ -295,6 +306,11 @@ def main() -> int:
             f"not_shown={result['not_shown_default']}  "
             f"load(all {result['full_nodes']})={result['load_full_ms']:.0f}ms  "
             f"frame={result['frame_ms']:.1f}ms"
+        )
+        print(
+            f"           rebuild_inferred={result['rebuild_ms']:.0f}ms  "
+            f"hubs={result['rebuild_hubs']}  links={result['rebuild_edges']}  "
+            "(runs synchronously on the calling thread)"
         )
         print(f"           total wall {time.perf_counter() - started:.1f}s")
     return 0
