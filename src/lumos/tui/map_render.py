@@ -205,13 +205,14 @@ def draw_map_panel(
             end = projected.get(edge.to_node_id)
             if start is None or end is None or not _segment_visible(start, end, iw, ih):
                 continue
-            style_name = _edge_style(edge, state)
+            style_name = edge_class(edge)
             canvas = layers.get(style_name)
             if canvas is None:
                 canvas = BrailleCanvas(iw, ih)
                 layers[style_name] = canvas
+            pattern = "observed" if state.animation else style_name
             canvas.draw_line((start[0] * 2 + 1, start[1] * 4 + 2),
-                             (end[0] * 2 + 1, end[1] * 4 + 2), style=style_name)
+                             (end[0] * 2 + 1, end[1] * 4 + 2), style=pattern)
         runs = _braille_runs(layers, iw, ih)
     else:
         grids: dict[str, list[list[str]]] = {}
@@ -222,9 +223,10 @@ def draw_map_panel(
             end = projected.get(edge.to_node_id)
             if start is None or end is None or not _segment_visible(start, end, iw, ih):
                 continue
-            style_name = _edge_style(edge, state)
+            style_name = edge_class(edge)
             grid = grids.setdefault(style_name, [[" " for _ in range(iw)] for _ in range(ih)])
-            _raster_line(grid, start, end, _EDGE_GLYPHS.get(style_name, ("-", "─"))[0])
+            solid = ("-", "─") if state.animation else _EDGE_GLYPHS.get(style_name, ("-", "─"))
+            _raster_line(grid, start, end, solid[0])
         runs = _ascii_runs(grids, iw, ih)
 
     for row, row_runs in enumerate(runs):
@@ -232,7 +234,8 @@ def draw_map_panel(
             if not text.strip():
                 continue
             safe_addstr(window, itop + row, ileft + x, text, max(1, iw - x),
-                        _attr(styles, f"edge_{edge_type}"), unicode_ok=unicode_ok)
+                        _attr(styles, link_token(edge_type, state.animation)),
+                        unicode_ok=unicode_ok)
 
     _draw_flow_dots(window, snapshot, state, projected, styles, (itop, ileft, ih, iw), unicode_ok)
     _draw_ripples(window, state, projected, styles, (itop, ileft, ih, iw), unicode_ok)
@@ -308,30 +311,38 @@ _FLOW_BRIGHT_TYPES = frozenset({"traceroute", "observed"})
 _FLOW_DIM_TYPES = frozenset({"inferred", "local"})
 
 
-def _edge_style(edge: Any, state: Any) -> str:
-    """Layer/style for a link: solid while animating, evidence-coded otherwise.
+# Practical, not decorative: the colour says how well the path is known, and
+# it reuses the tokens the rest of the interface already means.
+#   green  = measured (traceroute or a directly observed host)
+#   amber  = inferred, confident guess
+#   red    = weak inference / unknown hop
+#   cyan   = local interface
+_LINK_TOKENS = {
+    "observed": "ok",
+    "local": "accent",
+    "alternate": "accent",
+    "likely": "warn",
+    "weak": "error",
+}
 
-    With motion on, dotted evidence styles would read as a static trail of dots
-    along every path; the travelling dot's colour carries provenance instead.
-    Press ``a`` to get the dotted styles back.
+
+def link_token(link_class: str, animating: bool) -> str:
+    """Style token for a link: semantic while animating, evidence otherwise."""
+    if animating and link_class in _LINK_TOKENS:
+        return _LINK_TOKENS[link_class]
+    return f"edge_{link_class}"
+
+
+def _flow_token(edge: Any) -> str | None:
+    """Token for a travelling dot, or None when the link must stay still.
+
+    Keyed on the evidence class rather than ``edge.derived``: every inferred
+    edge is marked derived, so filtering on that flag would still the whole map.
     """
-    animated = getattr(state, "animation", False)
-    if animated and _flow_style(edge) is not None:
-        return "observed"
-    return edge_class(edge)
-
-
-def _flow_style(edge: Any) -> str | None:
-    """Style token for an animated link, or None when it must stay still.
-
-    Keyed on ``edge_type`` rather than ``derived``: every edge Lumos infers is
-    marked derived, so filtering on that flag would still the whole map.
-    """
-    if edge.edge_type in _FLOW_BRIGHT_TYPES:
-        return "flow"
-    if edge.edge_type in _FLOW_DIM_TYPES:
-        return "muted"
-    return None
+    link_class = edge_class(edge)
+    if edge.edge_type not in _FLOW_BRIGHT_TYPES | _FLOW_DIM_TYPES:
+        return None
+    return _LINK_TOKENS.get(link_class)
 
 
 def _draw_flow_dots(
@@ -349,7 +360,7 @@ def _draw_flow_dots(
     itop, ileft, ih, iw = rect
     glyph = animation.FLOW_GLYPH if unicode_ok else animation.FLOW_GLYPH_ASCII
     for edge in snapshot.edges:
-        style = _flow_style(edge)
+        style = _flow_token(edge)
         if style is None:
             continue
         start = projected.get(edge.from_node_id)

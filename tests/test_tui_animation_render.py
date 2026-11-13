@@ -107,23 +107,30 @@ class FlowDotTests(unittest.TestCase):
         self.assertGreaterEqual(len(dots), 2)
         self.assertLessEqual(len(dots), animation.FLOW_DOTS_PER_EDGE)
 
-    def test_links_are_solid_while_animating(self) -> None:
-        from lumos.tui import map_render
-
-        edge = snapshot(edge_type="inferred").edges[0]
-        animating = render.ViewState()
-        animating.animation = True
-        still = render.ViewState()
-        still.animation = False
-        self.assertEqual(map_render._edge_style(edge, animating), "observed")
-        self.assertEqual(map_render._edge_style(edge, still), map_render.edge_class(edge))
-
     def test_animation_toggle_stills_the_map(self) -> None:
         state = render.ViewState()
         state.animation = False
         state.now = 1.0
         glyphs = draw(snapshot(), state).cells()
         self.assertNotIn(animation.FLOW_GLYPH, glyphs.values())
+
+
+class LinkColourTests(unittest.TestCase):
+    def _edge(self, edge_type: str, confidence: float = 1.0):
+        return SimpleNamespace(edge_type=edge_type, confidence=confidence, derived=True)
+
+    def test_colour_reports_how_well_the_path_is_known(self) -> None:
+        self.assertEqual(map_render._flow_token(self._edge("traceroute")), "ok")
+        self.assertEqual(map_render._flow_token(self._edge("observed")), "ok")
+        self.assertEqual(map_render._flow_token(self._edge("inferred", 0.9)), "warn")
+        self.assertEqual(map_render._flow_token(self._edge("inferred", 0.2)), "error")
+        self.assertEqual(map_render._flow_token(self._edge("local")), "accent")
+        self.assertIsNone(map_render._flow_token(self._edge("manual")))
+
+    def test_lines_use_semantic_tokens_only_while_animating(self) -> None:
+        self.assertEqual(map_render.link_token("likely", True), "warn")
+        self.assertEqual(map_render.link_token("likely", False), "edge_likely")
+        self.assertEqual(map_render.link_token("manual", True), "edge_manual")
 
 
 class RippleTests(unittest.TestCase):
