@@ -45,9 +45,11 @@ from ..core.text import sanitize_text
 from ..core.vantage_store import save_interfaces as persist_interfaces
 from ..core.xml_import import import_nmap_xml
 
-# The Phase 2 runner only accepts -sS, -sT, -sU and -sV, so there is no
-# ping-only preset; a connect scan over the top ports is the safe default.
+# The runner accepts -sS, -sT, -sU, -sV and -sn. Ping discovery records hosts
+# and nothing else, which is the "who is on my network" question; a connect
+# scan over the top ports is still the safe default.
 SCAN_PRESETS: dict[str, str] = {
+    "discovery": "-sn",
     "connect": "-sT",
     "service": "-sV --top-ports 100",
     "udp": "-sU --top-ports 50",

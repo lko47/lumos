@@ -29,6 +29,7 @@ from .core.reports import write_markdown_report, write_svg_report
 from .core.scanning import ScopeConfirmationRequired, scan_database
 from .core.scan_store import ScanStoreError
 from .core.vantage_store import save_interfaces
+from .core.scope import read_target_file
 from .core.scope_store import add_scope_rule
 from .core.xml_import import import_nmap_xml
 from .services import actions, compare, notes, tags
@@ -97,7 +98,9 @@ def _parser() -> argparse.ArgumentParser:
 
     scan = commands.add_parser("scan", help="run a scope-checked scan using the installed Nmap")
     scan.add_argument("database", type=Path)
-    scan.add_argument("targets", nargs="+", help="IP, CIDR, range, or exactly allowlisted hostname")
+    scan.add_argument("targets", nargs="*", help="IP, CIDR, range, or exactly allowlisted hostname")
+    scan.add_argument("--target-file", type=Path, default=None,
+                      help="read targets from a file; every line is scope-checked")
     scan.add_argument("--network", required=True, help="named network to associate with observations")
     scan.add_argument("--nmap-options", default="", help="Nmap option text (no shell; targets remain scope-checked)")
     scan.add_argument("--nmap", dest="nmap_executable", help="explicit Nmap executable path")
@@ -258,6 +261,59 @@ def _print_progress(text: str) -> None:
     line = text.rstrip()
     if line:
         print(line, file=sys.stderr, flush=True)
+
+
+def _run_scan(args: Any) -> int:
+    """Run an Nmap or engine scan and print one summary line."""
+    print(AUTHORIZED_USE_NOTICE, file=sys.stderr)
+    if args.engine != "nmap":
+        return _run_engine_scan(args)
+    targets = _merged_targets(args)
+    if not targets:
+        print("lumos: give at least one target or --target-file", file=sys.stderr)
+        return 2
+    outcome = scan_database(
+        args.database,
+        args.network,
+        targets,
+        nmap_options=args.nmap_options,
+        interface=args.interface,
+        operator=args.operator,
+        executable=args.nmap_executable,
+        evidence=not args.no_evidence,
+        scope_confirmation=args.confirm_scope,
+        on_command=lambda command: _show_command(command, label="Nmap command", yes=args.yes),
+        on_progress=_print_progress,
+    )
+    result = outcome.result
+    if result.cancelled:
+        status = "cancelled"
+    elif result.exit_code == 0 and not result.parse_error:
+        status = "completed"
+    else:
+        status = "failed"
+    print(
+        f"Scan {outcome.scan_id}: {status}; {result.hosts_seen} host(s); exit {result.exit_code}"
+    )
+    if result.parse_error:
+        print(f"XML parser: {result.parse_error}", file=sys.stderr)
+    if result.stderr:
+        print(result.stderr, file=sys.stderr)
+    return 0 if status == "completed" else 1
+
+
+def _merged_targets(args: Any) -> tuple[str, ...]:
+    """Typed targets plus the lines of --target-file, deduplicated in order.
+
+    Nmap's own ``-iL`` is refused by the runner; Lumos reads the file so every
+    entry passes through the same scope guard as a typed target.
+    """
+    targets = list(args.targets)
+    if getattr(args, "target_file", None):
+        for target in read_target_file(args.target_file):
+            if target not in targets:
+                targets.append(target)
+    return tuple(targets)
 
 
 def _run_report_export(args: Any) -> int:
@@ -487,35 +543,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "scope" and args.scope_command == "show":
             return _scope_show(args.database)
-        if args.command == "scan" and args.engine != "nmap":
-            print(AUTHORIZED_USE_NOTICE, file=sys.stderr)
-            return _run_engine_scan(args)
         if args.command == "scan":
-            print(AUTHORIZED_USE_NOTICE, file=sys.stderr)
-            outcome = scan_database(
-                args.database,
-                args.network,
-                args.targets,
-                nmap_options=args.nmap_options,
-                interface=args.interface,
-                operator=args.operator,
-                executable=args.nmap_executable,
-                evidence=not args.no_evidence,
-                scope_confirmation=args.confirm_scope,
-                on_command=lambda command: _show_command(
-                    command,
-                    label="Nmap command",
-                    yes=args.yes,
-                ),
-                on_progress=_print_progress,
-            )
-            status = "cancelled" if outcome.result.cancelled else "completed" if outcome.result.exit_code == 0 and not outcome.result.parse_error else "failed"
-            print(f"Scan {outcome.scan_id}: {status}; {outcome.result.hosts_seen} host(s); exit {outcome.result.exit_code}")
-            if outcome.result.parse_error:
-                print(f"XML parser: {outcome.result.parse_error}", file=sys.stderr)
-            if outcome.result.stderr:
-                print(outcome.result.stderr, file=sys.stderr)
-            return 0 if status == "completed" else 1
+            return _run_scan(args)
         if args.command == "import":
             outcome = actions.import_xml(
                 args.database,

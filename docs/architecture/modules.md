@@ -13,7 +13,7 @@ flowchart LR
     P4["lumos.services"]
     P5["lumos.tui"]
     P0 -->|"1 imports"| P1
-    P1 -->|"13 imports"| P2
+    P1 -->|"14 imports"| P2
     P1 -->|"2 imports"| P3
     P1 -->|"5 imports"| P4
     P1 -->|"3 imports"| P5
@@ -38,6 +38,7 @@ flowchart LR
 | `lumos.cli` | `lumos.core.reports` |
 | `lumos.cli` | `lumos.core.scan_store` |
 | `lumos.cli` | `lumos.core.scanning` |
+| `lumos.cli` | `lumos.core.scope` |
 | `lumos.cli` | `lumos.core.scope_store` |
 | `lumos.cli` | `lumos.core.state` |
 | `lumos.cli` | `lumos.core.vantage_store` |

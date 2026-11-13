@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import ipaddress
 import re
 from dataclasses import dataclass
@@ -170,3 +172,41 @@ def is_target_in_scope(target: str, rules: list[ScopeRule] | tuple[ScopeRule, ..
     if any(low <= spec.end and high >= spec.start for low, high in exclude_intervals):
         return ScopeDecision(target, False, "target overlaps an explicit exclusion")
     return ScopeDecision(target, True, "target is fully contained in included scope")
+
+
+class TargetFileError(ValueError):
+    """A target file that cannot be read, with the reason in the sentence."""
+
+
+MAX_TARGET_FILE_ENTRIES = 4096
+
+
+def read_target_file(path: str | Path) -> tuple[str, ...]:
+    """Reads targets from a file so each line can be scope-checked.
+
+    Nmap's own ``-iL`` is deliberately not passed through: Lumos resolves the
+    list itself, so every entry goes through the same guard as a typed target.
+    Blank lines and ``#`` comments are ignored, and duplicates collapse.
+    """
+    source = Path(path).expanduser()
+    if not source.is_file():
+        raise TargetFileError(f"target file does not exist: {source}")
+    seen: list[str] = []
+    try:
+        text = source.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise TargetFileError(f"target file is not UTF-8 text: {source}") from exc
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        for token in line.replace(",", " ").split():
+            if token not in seen:
+                seen.append(token)
+    if not seen:
+        raise TargetFileError(f"target file lists no targets: {source}")
+    if len(seen) > MAX_TARGET_FILE_ENTRIES:
+        raise TargetFileError(
+            f"target file has more than {MAX_TARGET_FILE_ENTRIES} entries; split it"
+        )
+    return tuple(seen)

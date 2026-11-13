@@ -116,8 +116,8 @@ def parse_manual_options(text: str) -> list[str]:
             raise ValueError("Manual -oX/-oA conflicts with Lumos XML stdout; use -oN or -oG for additional output files, or remove the file-output option")
         if lowered in forbidden_exact or lowered.startswith(("--script=", "--datadir=", "--exclude=", "--resume=")):
             raise ValueError(f"Nmap option {item!r} is controlled or disabled by Lumos")
-        if item.startswith("-s") and item not in {"-sS", "-sT", "-sU", "-sV"}:
-            raise ValueError(f"Nmap scan mode {item!r} is not supported by the Phase 2 runner")
+        if item.startswith("-s") and item not in {"-sS", "-sT", "-sU", "-sV", "-sn"}:
+            raise ValueError(f"Nmap scan mode {item!r} is not supported by this runner")
         if lowered.startswith(("-on", "-og", "-os")) and len(lowered) > 3:
             if item[3:] in {"-", "/dev/stdout", "/proc/self/fd/1", "/dev/fd/1"}:
                 raise ValueError("Nmap text output cannot share stdout with Lumos XML")
@@ -152,11 +152,17 @@ def build_nmap_argv(
     tcp_scan_types = lower_options.intersection({"-ss", "-st"})
     if len(tcp_scan_types) > 1:
         raise ValueError("Select one TCP scan type; -sS and -sT cannot be combined")
+    discovery = "-sn" in lower_options
+    if discovery and lower_options.intersection({"-ss", "-st", "-su", "-sv"}):
+        raise ValueError(
+            "Ping discovery (-sn) runs without port or version probes;"
+            " remove the other scan modes"
+        )
     selected_scan_types = lower_options.intersection({"-ss", "-st", "-su"})
     if "--traceroute" in lower_options and (not selected_scan_types or "-st" in selected_scan_types):
         raise ValueError("Nmap traceroute is incompatible with Lumos's default/connect -sT scan; choose -sS or -sU explicitly")
-    scan_type = [] if selected_scan_types else ["-sT"]
-    version_detection = [] if "-sv" in lower_options else ["-sV"]
+    scan_type = [] if discovery or selected_scan_types else ["-sT"]
+    version_detection = [] if discovery or "-sv" in lower_options else ["-sV"]
     argv = [executable, *scan_type, *version_detection, "-n", *options]
     if stats_every:
         argv.extend(("--stats-every", "5s"))
