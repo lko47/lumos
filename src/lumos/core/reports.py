@@ -1,8 +1,12 @@
-"""Markdown and SVG report generation using the standard library only."""
+"""Markdown, SVG, JSON, CSV and HTML reports using the standard library only."""
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import html
+import io
+import json
 import math
 import os
 import re
@@ -420,3 +424,272 @@ def write_svg_report(
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(payload, encoding="utf-8")
     target.chmod(0o600)
+
+
+# --- machine-readable reports ------------------------------------------------
+
+REPORT_FORMATS = ("markdown", "svg", "json", "csv", "html")
+
+
+def _rows(database_path: str | Path, statement: str, params: tuple = ()) -> list[tuple]:
+    conn = open_database(database_path, readonly=True)
+    try:
+        return conn.execute(statement, params).fetchall()
+    finally:
+        conn.close()
+
+
+def _host_rows(database_path: str | Path) -> list[dict]:
+    """One record per host of the newest observation, deterministic order."""
+    rows = _rows(
+        database_path,
+        """
+        SELECT a.display_value AS address,
+               COALESCE(h.hostname, '') AS hostname,
+               COALESCE(h.os_name, '') AS os_name,
+               s.id AS scan_id, s.started_at AS scanned_at
+        FROM host_observations h
+        JOIN scans s ON s.id = h.scan_id
+        LEFT JOIN observation_addresses oa ON oa.host_observation_id = h.id
+        LEFT JOIN addresses a ON a.id = oa.address_id
+        WHERE h.id = (
+            SELECT h2.id FROM host_observations h2
+            WHERE h2.device_id = h.device_id
+            ORDER BY h2.observed_at DESC, h2.id DESC LIMIT 1
+        )
+        ORDER BY address, h.id
+        """,
+    )
+    seen: dict[str, dict] = {}
+    for address, hostname, os_name, scan_id, scanned_at in rows:
+        key = str(address or "")
+        if not key or key in seen:
+            continue
+        seen[key] = {
+            "address": sanitize_text(key, max_chars=128),
+            "hostname": sanitize_text(hostname, max_chars=256),
+            "os": sanitize_text(os_name, max_chars=256),
+            "scan_id": str(scan_id),
+            "scanned_at": str(scanned_at),
+            "ports": [],
+        }
+    if not seen:
+        return []
+    port_rows = _rows(
+        database_path,
+        """
+        SELECT a.display_value AS address, p.protocol, p.port, p.state,
+               COALESCE(p.service, ''), COALESCE(p.product, ''), COALESCE(p.version, '')
+        FROM port_observations p
+        JOIN host_observations h ON h.id = p.host_observation_id
+        LEFT JOIN observation_addresses oa ON oa.host_observation_id = h.id
+        LEFT JOIN addresses a ON a.id = oa.address_id
+        WHERE h.id IN (
+            SELECT h3.id FROM host_observations h3
+            WHERE h3.observed_at = (
+                SELECT MAX(h4.observed_at) FROM host_observations h4
+                WHERE h4.device_id = h3.device_id
+            )
+        )
+        ORDER BY address, p.port, p.protocol
+        """,
+    )
+    for address, protocol, port, state, service, product, version in port_rows:
+        host = seen.get(str(address or ""))
+        if host is None:
+            continue
+        host["ports"].append({
+            "protocol": sanitize_text(protocol, max_chars=8),
+            "port": int(port),
+            "state": sanitize_text(state, max_chars=16),
+            "service": sanitize_text(service, max_chars=64),
+            "product": sanitize_text(product, max_chars=128),
+            "version": sanitize_text(version, max_chars=64),
+        })
+    return [seen[key] for key in sorted(seen)]
+
+
+def build_json_report(database_path: str | Path) -> dict:
+    """The engagement as data: hosts, ports, links, notes and tags.
+
+    No wall-clock timestamp is included, so two exports of an unchanged
+    engagement are byte-identical and can be diffed or hashed.
+    """
+    engagement = _rows(database_path, "SELECT id, name FROM engagement LIMIT 1")
+    engagement_id, engagement_name = (
+        (str(engagement[0][0]), str(engagement[0][1])) if engagement else ("", "")
+    )
+    edges = _rows(
+        database_path,
+        "SELECT id, from_node_id, to_node_id, edge_type, source_kind, confidence"
+        " FROM topology_edges ORDER BY id",
+    )
+    notes = _rows(
+        database_path,
+        "SELECT target_kind, COALESCE(target_id, ''), body_markdown, author, updated_at"
+        " FROM notes ORDER BY updated_at, id",
+    )
+    tags = _rows(
+        database_path,
+        "SELECT object_kind, object_id, t.name FROM tag_links l"
+        " JOIN tags t ON t.id = l.tag_id ORDER BY t.name, l.object_id",
+    )
+    scans = _rows(
+        database_path,
+        "SELECT id, started_at, ended_at, status, targets_json FROM scans"
+        " ORDER BY started_at, id",
+    )
+    return {
+        "format": "lumos-engagement",
+        "version": 1,
+        "engagement": {"id": engagement_id, "name": engagement_name},
+        "scans": [
+            {
+                "id": str(scan_id),
+                "started_at": str(started_at or ""),
+                "ended_at": str(ended_at or ""),
+                "status": str(status),
+                "targets": json.loads(targets or "[]"),
+            }
+            for scan_id, started_at, ended_at, status, targets in scans
+        ],
+        "hosts": _host_rows(database_path),
+        "links": [
+            {
+                "id": str(edge_id),
+                "from": str(source),
+                "to": str(target),
+                "type": str(edge_type),
+                "source_kind": str(source_kind),
+                "confidence": float(confidence or 0.0),
+            }
+            for edge_id, source, target, edge_type, source_kind, confidence in edges
+        ],
+        "notes": [
+            {
+                "target_kind": str(kind),
+                "target_id": str(target_id),
+                "body": str(body),
+                "author": str(author),
+                "updated_at": str(updated_at or ""),
+            }
+            for kind, target_id, body, author, updated_at in notes
+        ],
+        "tags": [
+            {"object_kind": str(kind), "object_id": str(object_id), "name": str(name)}
+            for kind, object_id, name in tags
+        ],
+    }
+
+
+def _write_private(path: str | Path, text: str) -> None:
+    """Owner-only, no symlinks - the same rule the Markdown report follows."""
+    output = Path(path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if output.is_symlink():
+        raise ValueError("Refusing to write a report through a symbolic link")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(output, flags, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+        stream.write(text)
+    try:
+        output.chmod(0o600)
+    except OSError:
+        pass
+
+
+def write_json_report(database_path: str | Path, output_path: str | Path) -> None:
+    payload = build_json_report(database_path)
+    _write_private(output_path, json.dumps(payload, indent=2, sort_keys=False) + "\n")
+
+
+def build_csv_report(database_path: str | Path) -> str:
+    """One row per observable port; a host with no ports still gets a row."""
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow([
+        "address", "hostname", "os", "protocol", "port", "state",
+        "service", "product", "version", "scan_id", "scanned_at",
+    ])
+    for host in _host_rows(database_path):
+        base = [host["address"], host["hostname"], host["os"]]
+        tail = [host["scan_id"], host["scanned_at"]]
+        if not host["ports"]:
+            writer.writerow(base + ["", "", "", "", "", "", ""] + tail)
+            continue
+        for port in host["ports"]:
+            writer.writerow(base + [
+                port["protocol"], port["port"], port["state"], port["service"],
+                port["product"], port["version"],
+            ] + tail)
+    return buffer.getvalue()
+
+
+def write_csv_report(database_path: str | Path, output_path: str | Path) -> None:
+    _write_private(output_path, build_csv_report(database_path))
+
+
+def build_html_report(database_path: str | Path) -> str:
+    """A single self-contained page: no script, no external assets, all escaped."""
+    payload = build_json_report(database_path)
+    name = html.escape(payload["engagement"]["name"])
+    rows = []
+    for host in payload["hosts"]:
+        ports = ", ".join(
+            f"{item['port']}/{html.escape(str(item['protocol']))} "
+            f"{html.escape(str(item['state']))} {html.escape(str(item['service']))}".strip()
+            for item in host["ports"]
+        )
+        rows.append(
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+                html.escape(host["address"]),
+                html.escape(host["hostname"]),
+                html.escape(host["os"]),
+                html.escape(ports or "-"),
+            )
+        )
+    links = "".join(
+        "<tr><td>{}</td><td>{}</td><td>{}</td><td>{:.2f}</td></tr>".format(
+            html.escape(link["from"]), html.escape(link["to"]),
+            html.escape(f"{link['type']} ({link['source_kind']})"), link["confidence"],
+        )
+        for link in payload["links"]
+    )
+    notes = "".join(
+        "<li><strong>{}</strong>: {}</li>".format(
+            html.escape(note["target_id"] or note["target_kind"]), html.escape(note["body"])
+        )
+        for note in payload["notes"]
+    )
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Lumos report - {name}</title>
+<style>
+body {{ font: 14px/1.5 ui-monospace, monospace; margin: 2rem; color: #111; }}
+table {{ border-collapse: collapse; margin: 1rem 0; }}
+th, td {{ border: 1px solid #bbb; padding: 0.3rem 0.6rem; text-align: left; }}
+th {{ background: #eee; }}
+.dim {{ color: #666; }}
+</style>
+</head>
+<body>
+<h1>{name}</h1>
+<p class="dim">{len(payload["hosts"])} host(s), {len(payload["links"])} link(s),
+{len(payload["scans"])} scan(s). Inferred links are labelled, never presented as measured.</p>
+<h2>Hosts</h2>
+<table><thead><tr><th>address</th><th>hostname</th><th>OS</th><th>ports</th></tr></thead>
+<tbody>{"".join(rows) or "<tr><td colspan=\"4\">no hosts</td></tr>"}</tbody></table>
+<h2>Links</h2>
+<table><thead><tr><th>from</th><th>to</th><th>evidence</th><th>confidence</th></tr></thead>
+<tbody>{links or "<tr><td colspan=\"4\">no links</td></tr>"}</tbody></table>
+<h2>Notes</h2>
+<ul>{notes or "<li>none</li>"}</ul>
+</body>
+</html>
+"""
+
+
+def write_html_report(database_path: str | Path, output_path: str | Path) -> None:
+    _write_private(output_path, build_html_report(database_path))

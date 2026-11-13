@@ -44,6 +44,7 @@ Nmap progress flags are enabled for builds that support `--stats-every` (7.60 or
 | `?` `:` `/` | help, command palette, search |
 | `lumos note DB "text" --node ID` | attach a note to a node (`--list` to read them back; the sidebar shows the newest) |
 | `lumos tag DB dmz --node ID` | tag a node (`--list`, `--remove`) |
+| `lumos report json\|csv\|html DB OUT` | machine-readable exports (owner-only files) |
 | `lumos compare DB` | diff the last two completed scans (`--from`/`--to` take an id or a unique prefix, `--list` shows them) |
 
 ### Engagements, hubs and paths

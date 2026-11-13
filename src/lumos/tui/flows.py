@@ -650,10 +650,14 @@ def flow_report(window: Any, styles: dict[str, int], unicode_ok: bool, database:
         unicode_ok,
         "write report",
         [
-            forms.Field("format", "format", value="markdown", kind="choice", choices=("markdown", "svg")),
+            forms.Field("format", "format", value="markdown", kind="choice",
+                        choices=("markdown", "svg", "json", "csv", "html")),
             forms.Field("output", "output", value=str(actions.default_report_path(database, "markdown"))),
         ],
-        note="Markdown lists every inferred link with its rule; SVG draws them dotted.",
+        note=(
+            "Markdown lists every inferred link with its rule; SVG draws them dotted; "
+            "JSON/CSV/HTML are for sharing without the database."
+        ),
     )
     if values is None:
         return None

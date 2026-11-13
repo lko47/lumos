@@ -30,7 +30,13 @@ from ..core.inference import rebuild_inferred
 from ..core.merge import MergeError, merge_engagement
 from ..core.nmap.iflist import discover_interfaces
 from ..core.nmap.runner import NmapRunnerError
-from ..core.reports import write_markdown_report, write_svg_report
+from ..core.reports import (
+    write_csv_report,
+    write_html_report,
+    write_json_report,
+    write_markdown_report,
+    write_svg_report,
+)
 from ..core.scan_store import ScanStoreError, reconcile_interrupted_scans
 from ..core.scanning import ScopeConfirmationRequired, scan_database
 from ..core.scope import is_target_in_scope, parse_target
@@ -402,7 +408,9 @@ def import_xml(
 def default_report_path(database: str | Path, report_format: str) -> Path:
     path = Path(database).expanduser().absolute()
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    suffix = "svg" if report_format == "svg" else "md"
+    suffix = {
+        "svg": "svg", "json": "json", "csv": "csv", "html": "html",
+    }.get(report_format, "md")
     return path.parent / "reports" / f"{path.stem}-{stamp}.{suffix}"
 
 
@@ -420,12 +428,17 @@ def write_report(
         if target.exists() and not overwrite:
             return _fail(f"{target} exists; choose another name or confirm overwrite")
         target.parent.mkdir(parents=True, exist_ok=True)
-        if report_format == "svg":
-            write_svg_report(database, target, width=width, height=height)
-        elif report_format == "markdown":
-            write_markdown_report(database, target)
-        else:
+        writers = {
+            "svg": lambda: write_svg_report(database, target, width=width, height=height),
+            "markdown": lambda: write_markdown_report(database, target),
+            "json": lambda: write_json_report(database, target),
+            "csv": lambda: write_csv_report(database, target),
+            "html": lambda: write_html_report(database, target),
+        }
+        writer = writers.get(report_format)
+        if writer is None:
             return _fail(f"unknown report format {report_format!r}")
+        writer()
         return _ok(f"wrote {target.name}", detail=str(target), payload={"path": str(target)})
 
     return _guarded(run)

@@ -162,6 +162,15 @@ def _parser() -> argparse.ArgumentParser:
     svg.add_argument("output", type=Path)
     svg.add_argument("--width", type=int, default=1200)
     svg.add_argument("--height", type=int, default=800)
+    json_report = report_commands.add_parser("json", help="write the engagement as JSON")
+    json_report.add_argument("database", type=Path)
+    json_report.add_argument("output", type=Path)
+    csv_report = report_commands.add_parser("csv", help="write one row per port as CSV")
+    csv_report.add_argument("database", type=Path)
+    csv_report.add_argument("output", type=Path)
+    html_report = report_commands.add_parser("html", help="write a self-contained HTML page")
+    html_report.add_argument("database", type=Path)
+    html_report.add_argument("output", type=Path)
     return parser
 
 
@@ -249,6 +258,13 @@ def _print_progress(text: str) -> None:
     line = text.rstrip()
     if line:
         print(line, file=sys.stderr, flush=True)
+
+
+def _run_report_export(args: Any) -> int:
+    """JSON/CSV/HTML share one path: build the file, report the outcome."""
+    outcome = actions.write_report(args.database, args.output, report_format=args.report_format)
+    print(outcome.message, file=sys.stdout if outcome.ok else sys.stderr)
+    return 0 if outcome.ok else 2
 
 
 def _run_tag(args: Any) -> int:
@@ -359,12 +375,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command is None:
         return _open_default(None)
     try:
-        if args.command == "compare":
-            return _run_compare(args)
-        if args.command == "tag":
-            return _run_tag(args)
-        if args.command == "note":
-            return _run_note(args)
+        simple = {"compare": _run_compare, "note": _run_note, "tag": _run_tag}
+        if args.command in simple:
+            return simple[args.command](args)
         if args.command == "interfaces":
             snapshot = discover_interfaces(args.nmap_executable)
             if args.json:
@@ -531,6 +544,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise OSError(outcome.message)
             print(f"Wrote {args.output}")
             return 0
+        if args.command == "report" and args.report_format in {"json", "csv", "html"}:
+            return _run_report_export(args)
         if args.command == "report" and args.report_format == "markdown":
             outcome = actions.write_report(args.database, args.output, report_format="markdown")
             if not outcome.ok:
