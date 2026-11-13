@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import curses
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 import textwrap
@@ -9,6 +10,7 @@ import textwrap
 from . import mouse
 from .widgets import (
     clear_overlays,
+    clear_region,
     draw_box,
     remember_overlay,
     safe_addstr,
@@ -109,6 +111,9 @@ def _draw(
     left = max(0, (width - box_width) // 2)
     top, left, box_height, box_width = _clamp(height, width, top, left, box_height, box_width)
     remember_overlay(window, (top, left, box_height, box_width))
+    # A one-cell ring is blanked before the box is drawn, so a map label can
+    # never run into the frame and read as if it were inside the dialog.
+    clear_region(window, (top - 2, left - 2, box_height + 4, box_width + 4))
     itop, ileft, ih, iw = draw_box(
         window,
         top,
@@ -440,3 +445,128 @@ def choose(
                 index = (index + 1) % len(options)
     finally:
         window.timeout(1000)
+
+
+# --------------------------------------------------------------------------
+# Out-of-scope confirmation: a checkbox to prime, then a red confirm button
+
+CHECKBOX_HINT = "Space prime   Enter confirm   Esc cancel"
+PRIMED_ATTR = curses.A_REVERSE
+
+
+def _draw_button(
+    window: Any,
+    styles: dict[str, int],
+    unicode_ok: bool,
+    rect: tuple[int, int, int],
+    label: str,
+    primed: bool,
+) -> int:
+    """Draw the red confirm button; returns the row count it occupies.
+
+    Unprimed it is a red outline. Primed, the middle row is filled red with
+    reversed text so the arming is unmistakable.
+    """
+    row, left, width = rect
+    red = _attr(styles, "error")
+    text_attr = (red | PRIMED_ATTR) if primed else red
+    hz = "─" if unicode_ok else "-"
+    vt = "│" if unicode_ok else "|"
+    top = f"╭{hz * max(0, width - 2)}╮" if unicode_ok else f"+{'-' * max(0, width - 2)}+"
+    bottom = f"╰{hz * max(0, width - 2)}╯" if unicode_ok else f"+{'-' * max(0, width - 2)}+"
+    safe_addstr(window, row, left, top, width, red, unicode_ok=unicode_ok)
+    middle = f" {label} ".center(max(1, width - 2))
+    safe_addstr(window, row + 1, left, vt, 1, red, unicode_ok=unicode_ok)
+    safe_addstr(window, row + 1, left + 1, middle, max(1, width - 2), text_attr, unicode_ok=unicode_ok)
+    safe_addstr(window, row + 1, left + width - 1, vt, 1, red, unicode_ok=unicode_ok)
+    safe_addstr(window, row + 2, left, bottom, width, red, unicode_ok=unicode_ok)
+    mouse.add(row + 1, left, 1, width, {"kind": "button"})
+    return 3
+
+
+def confirm_scope(
+    window: Any,
+    styles: dict[str, int],
+    unicode_ok: bool,
+    *,
+    title: str,
+    lines: Sequence[str],
+    checkbox_label: str,
+    label: str = "confirm",
+) -> bool:
+    """Ask for an out-of-scope override: prime a checkbox, then confirm.
+
+    Returns True only when the operator armed the checkbox and pressed the
+    button (Enter, or a click on it). Esc and a click elsewhere cancel.
+    """
+    if _too_small(window, styles, unicode_ok):
+        return False
+    height, width = window.getmaxyx()
+    box_width = min(70, max(30, width - 2))
+    inner = max(12, box_width - 4)
+    info = [line for text in lines for line in _wrap(text, inner, max_lines=3)]
+    box_height = min(len(info) + 9, max(MIN_MODAL_HEIGHT, height - 2))
+    primed = False
+    shown = ""
+    while True:
+        clear_overlays(window)
+        top, left, box_height, box_width = _clamp(
+            height, width, max(0, (height - box_height) // 2), max(0, (width - box_width) // 2),
+            box_height, box_width,
+        )
+        remember_overlay(window, (top, left, box_height, box_width))
+        clear_region(window, (top - 2, left - 2, box_height + 4, box_width + 4))
+        itop, ileft, ih, iw = draw_box(
+            window, top, left, box_height, box_width,
+            title=f" {title} ", border_attr=_attr(styles, "border_focus"),
+            title_attr=_attr(styles, "brand"), unicode_ok=unicode_ok, focused=True,
+        )
+        row = itop
+        for line in info:
+            if row >= itop + ih - 6:
+                break
+            safe_addstr(window, row, ileft, line, iw, _attr(styles, "text"), unicode_ok=unicode_ok)
+            row += 1
+        row += 1
+        mark = "[x]" if primed else "[ ]"
+        box_attr = _attr(styles, "error") if primed else _attr(styles, "muted")
+        safe_addstr(window, row, ileft, f"{mark} {checkbox_label}", iw, box_attr, unicode_ok=unicode_ok)
+        mouse.add(row, ileft, 1, iw, {"kind": "checkbox"})
+        row += 2
+        button_width = max(22, min(iw - 2, len(label) + 12))
+        button_left = ileft + max(0, (iw - button_width) // 2)
+        _draw_button(
+            window, styles, unicode_ok, (row, button_left, button_width), label, primed
+        )
+        hint_row = itop + ih - 1
+        safe_addstr(
+            window, hint_row, ileft,
+            shown or CHECKBOX_HINT, iw,
+            _attr(styles, "error") if shown else _attr(styles, "muted"),
+            unicode_ok=unicode_ok,
+        )
+        window.refresh()
+        window.timeout(-1)
+        key = window.getch()
+        if mouse.is_mouse(key):
+            _event, action = mouse.read_action(window)
+            kind = str((action or {}).get("kind", ""))
+            if kind == "checkbox":
+                primed = not primed
+                shown = ""
+            elif kind == "button":
+                if primed:
+                    return True
+                shown = "prime the checkbox first"
+            continue
+        if key in (27, ord("q")):
+            return False
+        if key in (ord(" "), ord("c"), ord("C")):
+            primed = not primed
+            shown = ""
+            continue
+        if key in (10, 13, curses.KEY_ENTER):
+            if primed:
+                return True
+            shown = "prime the checkbox first"
+            continue

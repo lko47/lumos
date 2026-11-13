@@ -55,7 +55,7 @@ Interface keys: `N` new engagement, `P` scope rules, `S` scan, `I` import XML,
 log, `:` palette, `?` help. Existing map keys (`m`/`v`/`s`, `o`/`O`, `i`,
 `p`/`x`, `/`, `t`, `+`/`-`, `H J K L`, `0`, `q`) are unchanged.
 
-`192.0.2.0/24` is documentation-only address space; replace it with an explicitly authorized target and scope. By default, the scan command displays its exact command and asks for interactive confirmation. In non-interactive use, `--yes` skips that prompt; review the target and options before using it in automation. For a target outside the allowlist, the CLI blocks the scan and prints the exact typed override phrase; use `--confirm-scope` only when authorized.
+`192.0.2.0/24` is documentation-only address space; replace it with an explicitly authorized target and scope. By default, the scan command displays its exact command and asks for interactive confirmation. In non-interactive use, `--yes` skips that prompt; review the target and options before using it in automation. For a target outside the allowlist the scan is blocked: the TUI asks you to tick an acknowledgement and press a red Confirm button, and the CLI prints the exact override phrase to pass with `--confirm-scope`. Both are recorded in the audit log.
 
 To run the offline test suite without network access or a real scan:
 

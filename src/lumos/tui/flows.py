@@ -9,7 +9,14 @@ from typing import Any, Callable
 from ..services import actions
 from . import forms
 from . import mouse
-from .widgets import clear_overlays, clip, draw_box, remember_overlay, safe_addstr
+from .widgets import (
+    clear_overlays,
+    clear_region,
+    clip,
+    draw_box,
+    remember_overlay,
+    safe_addstr,
+)
 
 
 def _attr(styles: dict[str, int], name: str, default: int = 0) -> int:
@@ -24,6 +31,7 @@ def _box(window: Any, styles: dict[str, int], unicode_ok: bool, *, title: str, w
     left = max(0, (total_width - box_width) // 2)
     clear_overlays(window)
     remember_overlay(window, (top, left, box_height, box_width))
+    clear_region(window, (top - 2, left - 2, box_height + 4, box_width + 4))
     return draw_box(
         window,
         top,
@@ -351,20 +359,24 @@ def flow_scan(
         return preview
     phrase = ""
     if preview.payload["outside"]:
-        override = forms.run_form(
+        outside = ", ".join(sorted(set(preview.payload["outside"])))
+        plural = "are" if len(preview.payload["outside"]) > 1 else "is"
+        confirmed = forms.confirm_scope(
             window,
             styles,
             unicode_ok,
-            "out-of-scope targets",
-            [forms.Field("phrase", "phrase")],
-            note=f"Type exactly: {preview.payload['phrase']}",
-            validate=lambda field_values: None
-            if field_values["phrase"] == preview.payload["phrase"]
-            else "phrase does not match",
+            title="out of scope",
+            lines=[
+                f"{outside} {plural} not covered by an included scope rule.",
+                "Scanning anyway is recorded in the audit log with these exact targets.",
+            ],
+            checkbox_label="I understand and want to scan outside the scope",
         )
-        if override is None:
+        if not confirmed:
             return None
-        phrase = override["phrase"]
+        # The operator confirmed the same targets the phrase names, so the
+        # audit row still records the phrase the CLI would have required.
+        phrase = preview.payload["phrase"]
     interface = "" if values["interface"] == "auto" else values["interface"]
     job = actions.ScanJob(
         database,

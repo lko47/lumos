@@ -140,6 +140,26 @@ def _regions(window: Any) -> list[tuple[int, int, int, int]]:
         return _REGIONS_BY_ID.setdefault(id(window), [])
 
 
+def dim_region(window: Any, rect: tuple[int, int, int, int], attr: int) -> None:
+    """Re-attribute cells that are already drawn, to dim the frame behind a modal.
+
+    ``chgat`` changes the attribute of existing characters, so this repaints
+    nothing and cannot be confused with text a dialog later writes.
+    """
+    total_height, total_width = window.getmaxyx()
+    top, left, height, width = rect
+    top = max(0, top)
+    left = max(0, min(left, total_width - 1))
+    width = min(width, total_width - left)
+    if width <= 0 or height <= 0:
+        return
+    for row in range(top, min(top + height, total_height)):
+        try:
+            window.chgat(row, left, width, attr)
+        except curses.error:
+            continue
+
+
 def clear_region(window: Any, rect: tuple[int, int, int, int]) -> None:
     """Blank a rectangle so a redrawn or moved modal leaves no ghosts behind."""
     total_height, total_width = window.getmaxyx()
@@ -164,6 +184,11 @@ def clear_overlays(window: Any) -> None:
     if paint is not None:
         _regions(window).clear()
         paint()
+        # Dim what is behind the dialog: without this the map reads as if it
+        # were drawn on top of the box, especially where labels are clipped by
+        # the border.
+        height, width = window.getmaxyx()
+        dim_region(window, (0, 0, height, width), curses.A_DIM)
         return
     for rect in _regions(window):
         clear_region(window, rect)
