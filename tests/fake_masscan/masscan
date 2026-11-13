@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+"""Stand-in for masscan: writes Nmap-shaped XML, never touches the network."""
+
+import os
+import sys
+from pathlib import Path
+
+XML = """<?xml version="1.0"?>
+<nmaprun scanner="masscan" start="1762000000" version="1.3.2" xmloutputversion="1.03">
+<host><address addr="192.0.2.40" addrtype="ipv4"/><ports><port protocol="tcp" portid="22"><state state="open" reason="syn-ack" reason_ttl="0"/></port><port protocol="tcp" portid="443"><state state="open" reason="syn-ack" reason_ttl="0"/></port></ports></host>
+</nmaprun>
+"""
+
+marker = os.environ.get("FAKE_MASSCAN_MARKER")
+if marker:
+    Path(marker).write_text(" ".join(sys.argv[1:]), encoding="utf-8")
+try:
+    target = Path(sys.argv[sys.argv.index("--output-filename") + 1])
+except (ValueError, IndexError):
+    sys.exit(2)
+target.write_text(XML, encoding="utf-8")
+sys.exit(0)
