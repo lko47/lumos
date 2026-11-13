@@ -1,18 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE nmaprun>
-<?xml-stylesheet href="file:///usr/bin/../share/nmap/nmap.xsl" type="text/xsl"?>
-<!-- Nmap 7.993 scan initiated Thu Nov 12 20:06:03 2026 as: nmap -n -sT -p 22,80,443,8080 -oX - 127.0.0.1 -->
-<nmaprun scanner="nmap" args="nmap -n -sT -p 22,80,443,8080 -oX - 127.0.0.1" start="1794531963" startstr="Thu Nov 12 20:06:03 2026" version="7.993" xmloutputversion="1.05">
+<?xml-stylesheet href="file:///usr/share/nmap/nmap.xsl" type="text/xsl"?>
+<!-- Nmap 7.993 connect scan of documentation address space (RFC 5737); not a real target. -->
+<nmaprun scanner="nmap" args="nmap -n -sT -p 22,80,443,8080 -oX - 192.0.2.10" start="1700000000" startstr="Tue Nov 14 12:00:00 2026" version="7.993" xmloutputversion="1.05">
 <scaninfo type="connect" protocol="tcp" numservices="4" services="22,80,443,8080"/>
 <verbose level="0"/>
 <debugging level="0"/>
 <hosthint><status state="up" reason="unknown-response" reason_ttl="0"/>
-<address addr="127.0.0.1" addrtype="ipv4"/>
+<address addr="192.0.2.10" addrtype="ipv4"/>
 <hostnames>
 </hostnames>
 </hosthint>
-<host starttime="1794531963" endtime="1794531963"><status state="up" reason="conn-refused" reason_ttl="0"/>
-<address addr="127.0.0.1" addrtype="ipv4"/>
+<host starttime="1700000000" endtime="1700000001"><status state="up" reason="conn-refused" reason_ttl="0"/>
+<address addr="192.0.2.10" addrtype="ipv4"/>
 <hostnames>
 </hostnames>
 <ports><port protocol="tcp" portid="22"><state state="open" reason="syn-ack" reason_ttl="0"/><service name="ssh" method="table" conf="3"/></port>
@@ -20,8 +20,6 @@
 <port protocol="tcp" portid="443"><state state="closed" reason="conn-refused" reason_ttl="0"/><service name="https" method="table" conf="3"/></port>
 <port protocol="tcp" portid="8080"><state state="closed" reason="conn-refused" reason_ttl="0"/><service name="http-proxy" method="table" conf="3"/></port>
 </ports>
-<times srtt="30" rttvar="1594" to="100000"/>
-</host>
-<runstats><finished time="1794531963" timestr="Thu Nov 12 20:06:03 2026" summary="Nmap done at Thu Nov 12 20:06:03 2026; 1 IP address (1 host up) scanned in 0.03 seconds" elapsed="0.03" exit="success"/><hosts up="1" down="0" total="1"/>
-</runstats>
+<times srtt="1000" rttvar="500" to="100000"/></host>
+<runstats><finished time="1700000001" timestr="Tue Nov 14 12:00:01 2026" summary="Nmap done: 1 IP address (1 host up) scanned in 0.03 seconds" elapsed="0.03" exit="success"/><hosts up="1" down="0" total="1"/></runstats>
 </nmaprun>

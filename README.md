@@ -70,7 +70,7 @@ scale benchmark, and locally administered MACs (`02:00:…`). `10.0.0.0/24` appe
 prose only, as the textbook example of two private networks that share a CIDR. No
 engagement database, scan XML, or report is committed.
 
-Database creation refuses to overwrite an existing path and sets owner-only permissions. Report output is also created owner-only. Do not commit engagement databases, raw scan XML, or generated reports. `lumos db upgrade DATABASE` applies forward-only migrations to an existing file in place; the database keeps `application_id` `0x4C554D53` ("LUMS") and `user_version` 3.
+Database creation refuses to overwrite an existing path and sets owner-only permissions. Report output is also created owner-only. Do not commit engagement databases, raw scan XML, or generated reports: `.gitignore` excludes them, and `tests/test_repo_hygiene.py` fails the suite (and CI) if one is ever tracked. Committed Nmap XML is limited to synthetic fixtures under `tests/fixtures/nmap/`. `lumos db upgrade DATABASE` applies forward-only migrations to an existing file in place; the database keeps `application_id` `0x4C554D53` ("LUMS") and `user_version` 3.
 
 ## Data handling and Nmap
 

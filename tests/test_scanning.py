@@ -54,14 +54,14 @@ class ScanningPipelineTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_real_nmap_fixture_scans_end_to_end(self) -> None:
-        add_scope_rule(self.db, "loop", "127.0.0.1/32", included=True, author="tester")
-        real = ROOT / "tests" / "fixtures" / "nmap" / "real-127.0.0.1.xml"
-        with patch.dict(os.environ, {"NMAP_FAKE_FIXTURE": str(real)}):
+    def test_nmap_fixture_scans_end_to_end(self) -> None:
+        add_scope_rule(self.db, "doc", "192.0.2.0/24", included=True, author="tester")
+        fixture = ROOT / "tests" / "fixtures" / "nmap" / "connect-scan.xml"
+        with patch.dict(os.environ, {"NMAP_FAKE_FIXTURE": str(fixture)}):
             outcome = scan_database(
                 self.db,
-                "loop",
-                ["127.0.0.1"],
+                "doc",
+                ["192.0.2.10"],
                 executable=str(FAKE),
                 operator="tester",
             )

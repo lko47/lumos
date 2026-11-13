@@ -49,8 +49,8 @@ class NmapXmlImportTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_real_nmap_xml_file_imports_end_to_end(self) -> None:
-        scan_id, hosts, error = import_nmap_xml(self.db, "lab", FIXTURES / "real-127.0.0.1.xml")
+    def test_nmap_xml_file_imports_end_to_end(self) -> None:
+        scan_id, hosts, error = import_nmap_xml(self.db, "lab", FIXTURES / "connect-scan.xml")
         self.assertEqual((hosts, error), (1, ""))
         conn = open_database(self.db, readonly=True)
         try:
