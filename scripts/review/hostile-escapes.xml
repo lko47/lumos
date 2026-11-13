@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<nmaprun scanner="nmap" args="nmap -sT -oX - 198.51.100.0/24" start="1762600000" version="7.99" xmloutputversion="1.05">
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="198.51.100.10" addrtype="ipv4"/><address addr="02:00:00:00:00:01" addrtype="mac" vendor="Evil&amp;Co"/>
+<hostnames><hostname name="evil&#x9B;2J&#x9B;31mRED&#x202E;HOST&#x9B;]0;pwned&#x9B;.example" type="PTR"/></hostnames>
+<ports><port protocol="tcp" portid="22"><state state="open" reason="syn-ack"/>
+<service name="ssh&#x9B;1;1H"/> <script id="banner" output="&#x9B;2J&#x9B;Hoverwritten banner &#9608;&#9608;&#9608;"/></port></ports>
+<os><osmatch name="Evil OS &#x9B;5mblink&#x9B;0m" accuracy="99"/></os></host>
+<host><status state="up" reason="syn-ack" reason_ttl="0"/><address addr="198.51.100.11" addrtype="ipv4"/>
+<hostnames><hostname name="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.example"/></hostnames>
+<ports><port protocol="tcp" portid="80"><state state="open" reason="syn-ack"/><service name="http" product="x" version="y"/></port></ports></host>
+</nmaprun>
