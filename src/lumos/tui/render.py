@@ -57,6 +57,7 @@ class ViewState:
     show_inferred: bool = True
     pending: tuple[str, str] | None = None
     expanded_zone: str = ""
+    pinned: dict[str, tuple[float, float]] = field(default_factory=dict)
     path_start: str = ""
     path_end: str = ""
     path_nodes: frozenset[str] = frozenset()

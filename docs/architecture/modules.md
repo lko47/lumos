@@ -19,10 +19,10 @@ flowchart LR
     P1 -->|"3 imports"| P5
     P2 -->|"7 imports"| P3
     P3 -->|"4 imports"| P2
-    P4 -->|"21 imports"| P2
+    P4 -->|"23 imports"| P2
     P4 -->|"2 imports"| P3
     P5 -->|"14 imports"| P2
-    P5 -->|"14 imports"| P4
+    P5 -->|"16 imports"| P4
 ```
 
 | importing module | imported module |
@@ -81,6 +81,8 @@ flowchart LR
 | `lumos.services.map_view` | `lumos.core.text` |
 | `lumos.services.notes` | `lumos.core.database` |
 | `lumos.services.notes` | `lumos.core.text` |
+| `lumos.services.positions` | `lumos.core.database` |
+| `lumos.services.positions` | `lumos.core.text` |
 | `lumos.services.tags` | `lumos.core.database` |
 | `lumos.services.tags` | `lumos.core.text` |
 | `lumos.tui.app` | `lumos.core` |
@@ -93,6 +95,7 @@ flowchart LR
 | `lumos.tui.app` | `lumos.services.map_view` |
 | `lumos.tui.app` | `lumos.services.notes` |
 | `lumos.tui.app` | `lumos.services.path_view` |
+| `lumos.tui.app` | `lumos.services.positions` |
 | `lumos.tui.app` | `lumos.services.tags` |
 | `lumos.tui.app` | `lumos.services.workspace` |
 | `lumos.tui.flows` | `lumos.core` |
@@ -102,6 +105,7 @@ flowchart LR
 | `lumos.tui.flows` | `lumos.services.actions` |
 | `lumos.tui.map_render` | `lumos.core.decisions` |
 | `lumos.tui.map_render` | `lumos.services.map_view` |
+| `lumos.tui.map_render` | `lumos.services.positions` |
 | `lumos.tui.render` | `lumos.core.text` |
 | `lumos.tui.render` | `lumos.services.map_view` |
 | `lumos.tui.start` | `lumos.core` |

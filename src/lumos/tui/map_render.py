@@ -7,6 +7,7 @@ from typing import Any, Iterable
 from ..core.decisions import describe_edge
 from ..services.map_view import MapSnapshot, edge_class
 from .braille import BrailleCanvas
+from ..services.positions import overrides_for
 from .layout import compute_layout
 from . import animation
 from . import mouse
@@ -84,16 +85,26 @@ def _raster_line(canvas: list[list[str]], start: tuple[int, int], end: tuple[int
 _LAYOUT_CACHE: dict[tuple, dict[str, tuple[int, int]]] = {}
 
 
-def _cached_layout(nodes, width: int, height: int) -> dict[str, tuple[int, int]]:
+def _cached_layout(
+    nodes,
+    width: int,
+    height: int,
+    overrides: dict[str, tuple[int, int]] | None = None,
+) -> dict[str, tuple[int, int]]:
     """Layout is deterministic per node set and panel size, so cache it.
 
     Redraws (keystrokes, spinner ticks, live refreshes that changed nothing on
     screen) reuse the placement instead of re-hashing every node.
     """
-    key = (width, height, tuple((node.id, node.kind, node.distance) for node in nodes))
+    key = (
+        width,
+        height,
+        tuple(sorted((overrides or {}).items())),
+        tuple((node.id, node.kind, node.distance) for node in nodes),
+    )
     cached = _LAYOUT_CACHE.get(key)
     if cached is None:
-        cached = compute_layout(nodes, width, height)
+        cached = compute_layout(nodes, width, height, overrides=overrides)
         if len(_LAYOUT_CACHE) >= 8:
             _LAYOUT_CACHE.clear()
         _LAYOUT_CACHE[key] = cached
@@ -195,7 +206,10 @@ def draw_map_panel(
     )
     if ih < 2 or iw < 4:
         return {}, (itop, ileft, ih, iw)
-    positions = _cached_layout(snapshot.nodes, iw, ih)
+    pins = getattr(state, "pinned", {}) or {}
+    positions = _cached_layout(
+        snapshot.nodes, iw, ih, overrides_for(pins, iw, ih)
+    )
     projected = {node_id: state.viewport.project(point, iw, ih) for node_id, point in positions.items()}
 
     if unicode_ok:
@@ -616,6 +630,8 @@ def draw_sidebar(
     field(row + 2, "depth", str(node.distance))
     if node.ttl_hops is not None:
         field(row + 3, "about", f"{node.ttl_hops} hop(s) by TTL")
+    if node.id in (getattr(state, "pinned", {}) or {}):
+        line(row + 4, "pinned: f releases it", "accent")
     tags = getattr(node, "tags", ())
     if tags:
         line(row + 5, f"tags: {', '.join(tags)}", "accent")

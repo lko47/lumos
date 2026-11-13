@@ -33,7 +33,7 @@ Nmap progress flags are enabled for builds that support `--stats-every` (7.60 or
 | click / `Enter` | select a node, edge, row or field |
 | `o` / `O` | toggle the selected hub / collapse every hub |
 | `[ set start ]` `[ set end ]` | click the sidebar buttons to mark a path |
-| `b` / `y` | note / tags on the selected node |
+| `b` / `y` / `f` | note / tags / pin the selected node |
 | `a` | motion on/off (dots, ripples, solid links) |
 | `+` `-` `0` | zoom in, zoom out, recentre |
 | arrows, `HJKL`, drag, wheel | pan, and zoom at the pointer |

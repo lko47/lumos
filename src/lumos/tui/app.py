@@ -18,7 +18,7 @@ from ..core.decisions import DecisionError, record_decision
 from ..core.text import sanitize_text
 from ..services import actions
 from ..services.map_view import MapSnapshot, MapSnapshotWatcher, load_map_snapshot, render_plain_snapshot
-from ..services import notes, tags, workspace, path_view
+from ..services import notes, positions, tags, workspace, path_view
 from ..core import engines
 from . import theme
 from . import flows
@@ -27,6 +27,7 @@ from . import mouse
 from . import forms
 from .overlays import draw_help, draw_palette
 from .widgets import set_backdrop
+from .layout import compute_layout
 from .render import (
     ViewState,
     draw_footer,
@@ -397,6 +398,68 @@ def _tag_on_selection(
     return bool(applied)
 
 
+def _editing_key(
+    key: int,
+    state: ViewState,
+    snapshot: MapSnapshot,
+    ctx: UiContext,
+) -> bool:
+    """The three note/tag/pin keys; True when the map must be reloaded."""
+    if key == ord("f"):
+        _pin_on_selection(state, snapshot, ctx.window, ctx.database)
+        return False
+    handler = _note_on_selection if key == ord("b") else _tag_on_selection
+    return handler(ctx.window, ctx.styles, ctx.unicode_ok, ctx.database, state, snapshot)
+
+
+def _map_panel_size(window: Any) -> tuple[int, int]:
+    """The map panel's inner size, by the same rule render.py uses.
+
+    Reading the last drawn layout would use a snapshot taken before the click
+    that selected the node, which is wrong on the first key after a tab switch.
+    """
+    height, width = window.getmaxyx()
+    sidebar = max(24, min(38, width // 3))
+    return max(10, width - sidebar - 1), max(1, height - 4)
+
+
+def _pin_on_selection(
+    state: ViewState,
+    snapshot: MapSnapshot,
+    window: Any,
+    database: Path,
+) -> None:
+    """Pin the selected node where it sits, or release a pin it already has."""
+    if state.selected_kind != "node" or not (0 <= state.selected < len(snapshot.nodes)):
+        state.notify("select a node first")
+        return
+    node = snapshot.nodes[state.selected]
+    if node.id in state.pinned:
+        if positions.unpin_node(database, node.id):
+            state.pinned.pop(node.id, None)
+            state.notify(f"released {node.label}")
+        else:
+            state.notify("that node was not pinned")
+        return
+    width, height = _map_panel_size(window)
+    spots = compute_layout(snapshot.nodes, width, height,
+                           overrides=positions.overrides_for(state.pinned, width, height))
+    spot = spots.get(node.id)
+    if spot is None:
+        state.notify("that node is not placed yet")
+        return
+    x, y = positions.fraction_at(spot, width, height)
+    try:
+        positions.pin_node(
+            database, node_id=node.id, x=x, y=y, author=actions.default_operator()
+        )
+    except positions.PositionError as exc:
+        state.notify(str(exc))
+        return
+    state.pinned[node.id] = (x, y)
+    state.notify(f"pinned {node.label}; f releases it")
+
+
 def _refresh_path(state: ViewState, snapshot: MapSnapshot) -> None:
     """Recompute the highlighted path; node ids vanish when a hub collapses."""
     if not (state.path_start and state.path_end):
@@ -761,6 +824,10 @@ def _run_event_loop(ctx: UiContext, watcher: MapSnapshotWatcher) -> Path | None:
     if primed is None and watcher.error is not None:
         raise watcher.error
     state = ViewState()
+    try:
+        state.pinned = positions.load_pins(database)
+    except Exception:  # a read-only or foreign database simply has no pins
+        state.pinned = {}
     _clamp_selection(state, snapshot)
     dirty = True
     layout: FrameLayout | None = None
@@ -895,12 +962,8 @@ def _run_event_loop(ctx: UiContext, watcher: MapSnapshotWatcher) -> Path | None:
             theme_name = _cycle_theme(theme_name, capability)
             styles = theme.init_styles(theme_name, capability)
             state.notify(f"theme {theme_name} — {theme.THEME_DESCRIPTIONS.get(theme_name, '')}")
-        elif key == ord("y"):
-            if _tag_on_selection(window, styles, unicode_ok, database, state, snapshot):
-                watcher.reload_now()
-            dirty = True
-        elif key == ord("b"):
-            if _note_on_selection(window, styles, unicode_ok, database, state, snapshot):
+        elif key in (ord("b"), ord("y"), ord("f")):
+            if _editing_key(key, state, snapshot, ctx):
                 watcher.reload_now()
                 _refresh_path(state, snapshot)
             dirty = True
