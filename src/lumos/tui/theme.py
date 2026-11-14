@@ -156,6 +156,9 @@ THEMES: dict[str, dict[str, Style]] = {
 }
 
 THEME_ORDER = ("aurora", "ember", "matrix")
+
+# Plugin themes join the cycle in the order they were registered. THEME_ORDER
+# alone would leave a plugin palette selectable only through LUMOS_THEME.
 THEME_DESCRIPTIONS = {
     "aurora": "cyan and magenta",
     "ember": "warm oranges",
@@ -164,11 +167,18 @@ THEME_DESCRIPTIONS = {
 }
 
 
+def cycle_order() -> tuple[str, ...]:
+    """Built-in order first, then any plugin palettes (mono is NO_COLOR only)."""
+    extra = tuple(name for name in THEMES if name not in THEME_ORDER and name != "mono")
+    return THEME_ORDER + extra
+
+
 def next_theme(current: str) -> str:
     """Return the next cyclable theme (mono is selected only by NO_COLOR)."""
-    if current not in THEME_ORDER:
-        return THEME_ORDER[0]
-    return THEME_ORDER[(THEME_ORDER.index(current) + 1) % len(THEME_ORDER)]
+    order = cycle_order()
+    if current not in order:
+        return order[0]
+    return order[(order.index(current) + 1) % len(order)]
 
 
 # Tokens used by the animated layer (packet dots, ripples, liveness strip).
@@ -234,3 +244,33 @@ def init_styles(theme: str, capability: str) -> dict[str, int]:
         return styles
     except curses.error:
         return {name: attr for name, (_fg, _bg, attr) in resolved_styles(theme, CAPABILITY_MONO).items()}
+
+
+def register_plugin_themes(themes: dict[str, dict]) -> tuple[str, ...]:
+    """Merge plugin palettes in, converting plain mappings to Styles.
+
+    A plugin cannot replace a built-in theme: a name collision is ignored rather
+    than silently redefining how the interface looks.
+    """
+    registered: list[str] = []
+    for name, tokens in themes.items():
+        if name in THEMES or not isinstance(tokens, dict):
+            continue
+        palette: dict[str, Style] = {}
+        for token, spec in tokens.items():
+            if not isinstance(spec, dict):
+                continue
+            try:
+                palette[str(token)] = Style(
+                    fg=int(spec.get("fg", -1)),
+                    fg16=int(spec.get("fg16", spec.get("fg", -1))),
+                    bg=int(spec.get("bg", -1)),
+                    bg16=int(spec.get("bg16", spec.get("bg", -1))),
+                    attr=int(spec.get("attr", 0)),
+                )
+            except (TypeError, ValueError):
+                continue
+        if palette:
+            THEMES[name] = palette
+            registered.append(name)
+    return tuple(registered)

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Sequence
 
 from . import __version__
-from .core import engine_scan, reports
+from .core import engine_scan, plugins, reports
 from .core.inference import rebuild_inferred
 from .core.merge import MergeError, merge_engagement
 from .core.database import (
@@ -44,6 +44,10 @@ def _parser() -> argparse.ArgumentParser:
         description="Terminal network mapping built on the user's installed Nmap.",
     )
     parser.add_argument("--version", action="version", version=f"lumos {__version__}")
+    parser.add_argument(
+        "--no-plugins", action="store_true",
+        help="do not load exporter or theme plugins",
+    )
     commands = parser.add_subparsers(dest="command")
 
     db = commands.add_parser("db", help="create or validate an engagement database")
@@ -191,7 +195,18 @@ def _parser() -> argparse.ArgumentParser:
     note.add_argument("--list", action="store_true", dest="list_notes")
     note.add_argument("--operator", default=None)
 
+    plugins_cmd = commands.add_parser(
+        "plugins", help="list exporter and theme plugins that would load"
+    )
+    plugins_cmd.add_argument("--plugins-dir", action="append", default=[], help="also load from here")
+
     report = commands.add_parser("report", help="generate engagement reports")
+    _add_report_parsers(report)
+    return parser
+
+
+def _add_report_parsers(report: Any) -> None:
+    """Every report format, one place, because argparse wants them all here."""
     report_commands = report.add_subparsers(dest="report_format", required=True)
     markdown = report_commands.add_parser("markdown", help="write a Markdown report")
     markdown.add_argument("database", type=Path)
@@ -228,7 +243,12 @@ def _parser() -> argparse.ArgumentParser:
     xml_report.add_argument("database", type=Path)
     xml_report.add_argument("output", type=Path)
     xml_report.add_argument("--scan", default=None, help="scan id (default: newest stored)")
-    return parser
+    plugin_report = report_commands.add_parser(
+        "plugin", help="run an exporter plugin (see `lumos plugins`)"
+    )
+    plugin_report.add_argument("database", type=Path)
+    plugin_report.add_argument("output", type=Path)
+    plugin_report.add_argument("--name", required=True, help="exporter plugin name")
 
 
 def _show_command(argv: Sequence[str], *, label: str, yes: bool) -> None:
@@ -276,7 +296,8 @@ def _open_default(path: Path | None) -> int:
 
 
 SUBCOMMANDS = frozenset(
-    {"db", "scope", "interfaces", "scan", "import", "tui", "report", "note", "compare", "tag", "review", "queue", "export", "demo"}
+    {"db", "scope", "interfaces", "scan", "import", "tui", "report", "note", "compare", "tag", "review", "queue", "export", "demo",
+        "plugins"}
 )
 
 
@@ -354,6 +375,38 @@ def _run_scan(args: Any) -> int:
     if result.stderr:
         print(result.stderr, file=sys.stderr)
     return 0 if status == "completed" else 1
+
+
+def _run_plugins(args: Any) -> int:
+    """Say what would load, and every reason something would not."""
+    registry = plugins.load_plugins(directories=tuple(args.plugins_dir))
+    for line in plugins.describe(registry):
+        print(line)
+    for error in registry.errors:
+        print(f"lumos: skipped: {error}", file=sys.stderr)
+    if not registry.exporters and not registry.themes and not registry.errors:
+        print("no plugins found; set LUMOS_PLUGIN_PATH or use ~/.config/lumos/plugins")
+    return 0 if not registry.errors else 1
+
+
+def _run_plugin_export(args: Any) -> int:
+    """Hand the database to a plugin exporter, then check it actually wrote."""
+    registry = plugins.load_plugins(enabled=not getattr(args, "no_plugins", False))
+    chosen = registry.exporter(args.name)
+    if chosen is None:
+        known = ", ".join(sorted(reports.REPORT_FORMATS)) + " and any plugin exporter"
+        print(f"lumos: no exporter plugin named {args.name!r}; have {known}", file=sys.stderr)
+        for error in registry.errors:
+            print(f"lumos: skipped: {error}", file=sys.stderr)
+        return 2
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    message = chosen.export(str(args.database), str(output))
+    if not output.exists():
+        print(f"lumos: plugin {chosen.name!r} did not write {output}", file=sys.stderr)
+        return 2
+    print(message or f"wrote {output.name}")
+    return 0
 
 
 def _run_demo(args: Any) -> int:
@@ -652,7 +705,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         simple = {
             "compare": _run_compare, "note": _run_note, "tag": _run_tag,
             "review": _run_review, "queue": _run_queue_command,
-            "export": _run_export, "demo": _run_demo,
+            "export": _run_export, "demo": _run_demo, "plugins": _run_plugins,
         }
         if args.command in simple:
             return simple[args.command](args)
@@ -795,6 +848,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise OSError(outcome.message)
             print(f"Wrote {args.output}")
             return 0
+        if args.command == "report" and args.report_format == "plugin":
+            return _run_plugin_export(args)
         if args.command == "report" and args.report_format == "nmap-xml":
             reports.write_nmap_xml_report(args.database, args.output, scan_id=args.scan)
             print(f"Wrote stored Nmap XML to {args.output}")

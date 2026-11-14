@@ -19,7 +19,7 @@ from ..core.text import sanitize_text
 from ..services import actions
 from ..services.map_view import MapSnapshot, MapSnapshotWatcher, load_map_snapshot, render_plain_snapshot
 from ..services import notes, positions, review, tags, workspace, path_view
-from ..core import engines
+from ..core import engines, plugins
 from . import theme
 from . import flows
 from . import animation
@@ -1162,6 +1162,16 @@ def run_tui(database: str | Path, workspace: tuple[str, ...] = ()) -> int:
         raise SystemExit(128 + signum)
 
     try:
+        # Themes from plugins are merged before curses starts, so `t` cycles
+        # them like any built-in palette. A broken plugin is reported in the
+        # log, never fatal to the interface.
+        registry = plugins.load_plugins()
+        if registry.themes:
+            theme.register_plugin_themes(
+                {name: item.theme for name, item in registry.themes.items()}
+            )
+        for error in registry.errors:
+            print(f"lumos: skipped plugin: {error}", file=sys.stderr)
         signal.signal(signal.SIGTERM, terminate)
         try:
             curses.wrapper(_run_curses, path, tuple(workspace))

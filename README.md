@@ -193,6 +193,12 @@ for likely, one-on/five-off for weak) while measured and local links stay solid,
 labels hubs with their CIDR and member count, and repeats the caveat in the
 image and its description.
 
+## Plugins
+
+Two kinds, both optional and both versioned: **exporter** plugins add a report format (`lumos report plugin DB OUT --name NAME`) and **theme** plugins add a palette (they join the `t` cycle). They load only from `LUMOS_PLUGIN_PATH` and `~/.config/lumos/plugins`; `lumos plugins` lists what would load and every refusal; `--no-plugins` or `LUMOS_NO_PLUGINS=1` turns the whole surface off.
+
+A plugin is arbitrary Python with your privileges — the loader validates declarations and refuses API mismatches, but consent is the actual defence. See `docs/PLUGINS.md`, with working examples in `examples/plugins/`. `docs/ZENMAP-PARITY.md` records what Zenmap does that Lumos does not.
+
 ## Exports other tools can read
 
 | Command | Output |

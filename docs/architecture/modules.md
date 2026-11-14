@@ -13,7 +13,7 @@ flowchart LR
     P4["lumos.services"]
     P5["lumos.tui"]
     P0 -->|"1 imports"| P1
-    P1 -->|"15 imports"| P2
+    P1 -->|"16 imports"| P2
     P1 -->|"2 imports"| P3
     P1 -->|"9 imports"| P4
     P1 -->|"3 imports"| P5
@@ -21,7 +21,7 @@ flowchart LR
     P3 -->|"4 imports"| P2
     P4 -->|"33 imports"| P2
     P4 -->|"4 imports"| P3
-    P5 -->|"14 imports"| P2
+    P5 -->|"15 imports"| P2
     P5 -->|"17 imports"| P4
 ```
 
@@ -35,6 +35,7 @@ flowchart LR
 | `lumos.cli` | `lumos.core.merge` |
 | `lumos.cli` | `lumos.core.nmap.iflist` |
 | `lumos.cli` | `lumos.core.nmap.runner` |
+| `lumos.cli` | `lumos.core.plugins` |
 | `lumos.cli` | `lumos.core.reports` |
 | `lumos.cli` | `lumos.core.scan_store` |
 | `lumos.cli` | `lumos.core.scanning` |
@@ -106,6 +107,7 @@ flowchart LR
 | `lumos.tui.app` | `lumos.core` |
 | `lumos.tui.app` | `lumos.core.decisions` |
 | `lumos.tui.app` | `lumos.core.engines` |
+| `lumos.tui.app` | `lumos.core.plugins` |
 | `lumos.tui.app` | `lumos.core.state` |
 | `lumos.tui.app` | `lumos.core.text` |
 | `lumos.tui.app` | `lumos.services` |
