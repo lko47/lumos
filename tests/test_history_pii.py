@@ -6,6 +6,7 @@ a clean result would be a false negative rather than a pass.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import unittest
 from pathlib import Path
@@ -37,7 +38,7 @@ class HistoryPiiTests(unittest.TestCase):
     def test_the_guard_catches_a_leak_in_an_old_revision(self) -> None:
         """A guard that cannot fail on the leak it was written for is decoration."""
         tmp = REPO.parent / "lumos-history-guard-probe"
-        subprocess.run(["rm", "-rf", str(tmp)], check=False)
+        shutil.rmtree(tmp, ignore_errors=True)
         made = subprocess.run(["git", "init", "-q", str(tmp)], capture_output=True, check=False)
         if made.returncode != 0:  # pragma: no cover - environment without git
             self.skipTest("git init unavailable")
@@ -61,7 +62,7 @@ class HistoryPiiTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, "an old revision must still be caught")
         self.assertIn("10." + "101.22.1", result.stderr)
         self.assertIn("/home/" + "bit", result.stderr)
-        subprocess.run(["rm", "-rf", str(tmp)], check=False)
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

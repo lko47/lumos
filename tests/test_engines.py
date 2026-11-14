@@ -51,7 +51,8 @@ class SettingsTests(unittest.TestCase):
 
     def test_toggle_writes_the_file_and_survives_a_reload(self) -> None:
         found = {"nmap": "/usr/bin/nmap", "masscan": None, "naabu": None, "rustscan": None}
-        with mock.patch.object(engines, "detect", return_value=found):
+        with mock.patch.object(engines, "detect", return_value=found), \
+                mock.patch.object(engines, "which", return_value="/usr/bin/nmap"):
             rows = engines.toggle("nmap", self.path)
             self.assertFalse({row.name for row in rows if row.enabled})
             payload = json.loads(self.path.read_text(encoding="utf-8"))
@@ -61,7 +62,8 @@ class SettingsTests(unittest.TestCase):
 
     def test_toggle_refuses_an_absent_binary(self) -> None:
         with mock.patch.object(engines, "detect", return_value={name: None for name in
-                                                                ("nmap", "masscan", "naabu", "rustscan")}):
+                                                                ("nmap", "masscan", "naabu", "rustscan")}), \
+                mock.patch.object(engines, "which", return_value=None):
             rows = engines.toggle("masscan", self.path)
         self.assertFalse(any(row.enabled for row in rows))
 
