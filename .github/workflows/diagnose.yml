@@ -1,0 +1,46 @@
+name: Diagnose
+on: push
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Publish failure text as a commit status
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.sha }}
+        run: |
+          set +e
+          python -m unittest discover -s tests > /tmp/out.txt 2>&1
+          CODE=$?
+          python - "$CODE" <<'PY'
+          import json, os, re, sys, urllib.request
+          code = sys.argv[1]
+          text = open('/tmp/out.txt', encoding='utf-8', errors='replace').read()
+          hits = [line for line in text.splitlines() if line.startswith(('FAIL:', 'ERROR:'))]
+          tail = [line.strip() for line in text.splitlines() if line.strip()][-2:]
+          summary = (hits[0] if hits else ' | '.join(tail))[:140]
+          trace = [line.strip() for line in text.splitlines() if 'Error:' in line or 'assert' in line][:3]
+          body = json.dumps({
+              "state": "failure" if code != "0" else "success",
+              "context": "diagnose/3.10",
+              "description": summary or "no failure text",
+          }).encode()
+          req = urllib.request.Request(
+              f"https://api.github.com/repos/lko47/lumos/statuses/{os.environ['SHA']}",
+              data=body,
+              headers={"Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                       "Accept": "application/vnd.github+json",
+                       "Content-Type": "application/json"})
+          urllib.request.urlopen(req).read()
+          print("DIAG:", summary)
+          for line in trace: print("TRACE:", line)
+          PY
+          exit $CODE
