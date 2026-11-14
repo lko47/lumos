@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Sequence
 
 from . import __version__
-from .core import engine_scan
+from .core import engine_scan, reports
 from .core.inference import rebuild_inferred
 from .core.merge import MergeError, merge_engagement
 from .core.database import (
@@ -212,6 +212,22 @@ def _parser() -> argparse.ArgumentParser:
     html_report = report_commands.add_parser("html", help="write a self-contained HTML page")
     html_report.add_argument("database", type=Path)
     html_report.add_argument("output", type=Path)
+    dot_report = report_commands.add_parser(
+        "dot", help="write the topology as Graphviz DOT (dashed = inferred)"
+    )
+    dot_report.add_argument("database", type=Path)
+    dot_report.add_argument("output", type=Path)
+    mermaid_report = report_commands.add_parser(
+        "mermaid", help="write the topology as a Mermaid flowchart"
+    )
+    mermaid_report.add_argument("database", type=Path)
+    mermaid_report.add_argument("output", type=Path)
+    xml_report = report_commands.add_parser(
+        "nmap-xml", help="re-emit the stored Nmap XML for one scan"
+    )
+    xml_report.add_argument("database", type=Path)
+    xml_report.add_argument("output", type=Path)
+    xml_report.add_argument("--scan", default=None, help="scan id (default: newest stored)")
     return parser
 
 
@@ -779,7 +795,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise OSError(outcome.message)
             print(f"Wrote {args.output}")
             return 0
-        if args.command == "report" and args.report_format in {"json", "csv", "html"}:
+        if args.command == "report" and args.report_format == "nmap-xml":
+            reports.write_nmap_xml_report(args.database, args.output, scan_id=args.scan)
+            print(f"Wrote stored Nmap XML to {args.output}")
+            return 0
+        if args.command == "report" and args.report_format in {
+            "json", "csv", "html", "dot", "mermaid"
+        }:
             return _run_report_export(args)
         if args.command == "report" and args.report_format == "markdown":
             outcome = actions.write_report(args.database, args.output, report_format="markdown")

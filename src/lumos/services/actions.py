@@ -32,7 +32,9 @@ from ..core.nmap.iflist import discover_interfaces
 from ..core.nmap.runner import NmapRunnerError
 from ..core.reports import (
     write_csv_report,
+    write_dot_report,
     write_html_report,
+    write_mermaid_report,
     write_json_report,
     write_markdown_report,
     write_svg_report,
@@ -412,6 +414,7 @@ def default_report_path(database: str | Path, report_format: str) -> Path:
     stamp = time.strftime("%Y%m%d-%H%M%S")
     suffix = {
         "svg": "svg", "json": "json", "csv": "csv", "html": "html",
+        "dot": "dot", "mermaid": "mmd", "nmap-xml": "xml",
     }.get(report_format, "md")
     return path.parent / "reports" / f"{path.stem}-{stamp}.{suffix}"
 
@@ -436,6 +439,8 @@ def write_report(
             "json": lambda: write_json_report(database, target),
             "csv": lambda: write_csv_report(database, target),
             "html": lambda: write_html_report(database, target),
+            "dot": lambda: write_dot_report(database, target),
+            "mermaid": lambda: write_mermaid_report(database, target),
         }
         writer = writers.get(report_format)
         if writer is None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import gzip
 import hashlib
 import html
 import io
@@ -15,6 +16,7 @@ from typing import Iterator
 
 from .database import open_database
 from .evidence import SVG_STYLE, classify
+from .nmap.xml_stream import MAX_XML_BYTES, parse_nmap_xml
 from .text import sanitize_text
 
 
@@ -428,7 +430,7 @@ def write_svg_report(
 
 # --- machine-readable reports ------------------------------------------------
 
-REPORT_FORMATS = ("markdown", "svg", "json", "csv", "html")
+REPORT_FORMATS = ("markdown", "svg", "json", "csv", "html", "dot", "mermaid", "nmap-xml")
 
 
 def _rows(database_path: str | Path, statement: str, params: tuple = ()) -> list[tuple]:
@@ -596,6 +598,150 @@ def _write_private(path: str | Path, text: str) -> None:
         output.chmod(0o600)
     except OSError:
         pass
+
+
+
+
+_EDGE_STYLE = {
+    # Line weight is a claim about evidence, in both writers: solid is measured,
+    # dashed is inferred, bold is human-made. The schema's edge_type values are
+    # traceroute/alternate/inferred/manual/imported.
+    "traceroute": ("solid", "-->"),
+    "alternate": ("dotted", "-.->"),
+    "manual": ("bold", "==>"),
+    "inferred": ("dashed", "-.->"),
+    "imported": ("dotted", "-.->"),
+}
+
+
+def _topology_rows(database_path: str | Path) -> tuple[list[tuple], list[tuple]]:
+    nodes = _rows(
+        database_path,
+        "SELECT id, kind, COALESCE(label, '') FROM topology_nodes"
+        " ORDER BY CASE kind WHEN 'root' THEN 0 WHEN 'zone' THEN 1 ELSE 2 END, label",
+    )
+    edges = _rows(
+        database_path,
+        "SELECT from_node_id, to_node_id, edge_type, COALESCE(confidence, 0.0)"
+        " FROM topology_edges ORDER BY from_node_id, to_node_id",
+    )
+    return nodes, edges
+
+
+def _dot_escape(value: object) -> str:
+    return str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")
+
+
+def build_dot_report(database_path: str | Path) -> str:
+    """Graphviz DIGRAPH: the map as text, so it survives a diff and a review."""
+    nodes, edges = _topology_rows(database_path)
+    lines = ["digraph lumos {", '  graph [rankdir="LR", bgcolor="transparent"];',
+             '  node [shape="box", style="rounded", fontname="monospace"];',
+             '  edge [fontname="monospace", fontsize="9"];']
+    for node_id, kind, label in nodes:
+        shape = {"root": "doubleoctagon", "zone": "ellipse", "device": "box"}.get(str(kind), "box")
+        lines.append(
+            f'  "{_dot_escape(node_id)}" [label="{_dot_escape(label or str(node_id)[:8])}",'
+            f' shape="{shape}"];'
+        )
+    for source, target, edge_type, confidence in edges:
+        style, _arrow = _EDGE_STYLE.get(str(edge_type), ("dashed", "->"))
+        lines.append(
+            f'  "{_dot_escape(source)}" -> "{_dot_escape(target)}"'
+            f' [style="{style}", label="{style} {float(confidence or 0.0):.2f}"];'
+        )
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
+def _mermaid_label(value: object) -> str:
+    text = str(value).replace('"', "'").replace("\n", " ").replace("<", "(").replace(">", ")")
+    return text[:80]
+
+
+def build_mermaid_report(database_path: str | Path) -> str:
+    """A flowchart that renders in a browser or a Markdown file without plugins."""
+    nodes, edges = _topology_rows(database_path)
+    aliases = {str(node[0]): f"n{index}" for index, node in enumerate(nodes)}
+    lines = ["flowchart TD"]
+    for node_id, kind, label in nodes:
+        alias = aliases[str(node_id)]
+        glyph = {"root": "(( ))", "zone": "[ ]", "device": "( )"}.get(str(kind), "[ ]")
+        text = _mermaid_label(label or str(node_id)[:8])
+        if glyph == "(( ))":
+            lines.append(f'  {alias}(("{text}"))')
+        elif glyph == "( )":
+            lines.append(f'  {alias}("{text}")')
+        else:
+            lines.append(f'  {alias}["{text}"]')
+    for source, target, edge_type, confidence in edges:
+        style, arrow = _EDGE_STYLE.get(str(edge_type), ("dashed", "-.->"))
+        if style == "bold":
+            lines.append(f"  {aliases[str(source)]} ==> {aliases[str(target)]}")
+        elif style == "solid":
+            lines.append(f"  {aliases[str(source)]} --> {aliases[str(target)]}")
+        else:
+            # Dotted links carry the evidence type, never a number that a reader
+            # would mistake for a probability.
+            lines.append(
+                f"  {aliases[str(source)]} -. {str(edge_type)} .-> {aliases[str(target)]}"
+            )
+    return "\n".join(lines) + "\n"
+
+
+def stored_scans(database_path: str | Path) -> list[tuple[str, str, int]]:
+    """Scans that kept their raw XML, newest first: (id, started_at, bytes)."""
+    return [
+        (str(scan_id), str(started_at or ""), int(byte_length or 0))
+        for scan_id, started_at, byte_length in _rows(
+            database_path,
+            "SELECT e.scan_id, s.started_at, e.byte_length FROM raw_scan_evidence e"
+            " JOIN scans s ON s.id = e.scan_id ORDER BY s.started_at DESC, e.scan_id",
+        )
+    ]
+
+
+def build_nmap_xml_report(database_path: str | Path, scan_id: str | None = None) -> str:
+    """The stored Nmap XML for one scan, re-emitted verbatim.
+
+    This is the only export that is evidence rather than a rendering of it, so
+    it refuses to invent anything: no scan id means the newest stored scan, and
+    a missing blob is an error rather than an empty document.
+    """
+    rows = _rows(
+        database_path,
+        "SELECT scan_id, compression, payload FROM raw_scan_evidence WHERE scan_id = ?"
+        if scan_id else
+        "SELECT scan_id, compression, payload FROM raw_scan_evidence"
+        " ORDER BY stored_at DESC LIMIT 1",
+        (scan_id,) if scan_id else (),
+    )
+    if not rows:
+        raise ValueError(
+            "no stored scan evidence; re-run the scan with evidence enabled"
+            + (f" for scan {scan_id}" if scan_id else "")
+        )
+    stored_id, compression, payload = rows[0]
+    raw = gzip.decompress(bytes(payload)) if str(compression) == "gzip" else bytes(payload)
+    # Prove it is parseable Nmap XML before handing it out as evidence.
+    list(parse_nmap_xml([raw], max_bytes=max(len(raw), MAX_XML_BYTES)))
+    text = raw.decode("utf-8", "replace")
+    return text if text.endswith("\n") else text + "\n"
+
+
+def write_dot_report(database_path: str | Path, output_path: str | Path) -> None:
+    _write_private(output_path, build_dot_report(database_path))
+
+
+def write_mermaid_report(database_path: str | Path, output_path: str | Path) -> None:
+    _write_private(output_path, build_mermaid_report(database_path))
+
+
+def write_nmap_xml_report(
+    database_path: str | Path, output_path: str | Path, *, scan_id: str | None = None
+) -> None:
+    _write_private(output_path, build_nmap_xml_report(database_path, scan_id))
+
 
 
 def write_json_report(database_path: str | Path, output_path: str | Path) -> None:

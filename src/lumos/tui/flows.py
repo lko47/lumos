@@ -326,6 +326,8 @@ def _interface_choices() -> tuple[str, ...]:
     return ("auto",) + tuple(name for name in names if name != "auto")
 
 
+# nmap-xml needs a scan id, so it stays a CLI and palette-argument feature.
+REPORT_FORMATS = ("markdown", "svg", "json", "csv", "html", "dot", "mermaid")
 ENGINE_POLL_SECONDS = 0.15
 
 
@@ -651,7 +653,7 @@ def flow_report(window: Any, styles: dict[str, int], unicode_ok: bool, database:
         "write report",
         [
             forms.Field("format", "format", value="markdown", kind="choice",
-                        choices=("markdown", "svg", "json", "csv", "html")),
+                        choices=REPORT_FORMATS),
             forms.Field("output", "output", value=str(actions.default_report_path(database, "markdown"))),
         ],
         note=(

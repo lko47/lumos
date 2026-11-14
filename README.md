@@ -193,6 +193,21 @@ for likely, one-on/five-off for weak) while measured and local links stay solid,
 labels hubs with their CIDR and member count, and repeats the caveat in the
 image and its description.
 
+## Exports other tools can read
+
+| Command | Output |
+| --- | --- |
+| `lumos report markdown DB OUT.md` | the engagement as prose, inferred links labelled with their rule |
+| `lumos report svg DB OUT.svg` | the map, dotted where evidence is inferred |
+| `lumos report json DB OUT.json` | hosts, ports, links, notes and tags as data (no timestamp, so it diffs) |
+| `lumos report csv DB OUT.csv` | one row per port |
+| `lumos report html DB OUT.html` | a self-contained page |
+| `lumos report dot DB OUT.dot` | Graphviz: solid = measured, dashed = inferred, bold = manual |
+| `lumos report mermaid DB OUT.mmd` | a `flowchart` that renders in Markdown without plugins |
+| `lumos report nmap-xml DB OUT.xml [--scan ID]` | the stored Nmap XML for one scan, re-emitted verbatim |
+
+Only `nmap-xml` is evidence rather than a rendering of it, so it refuses to invent anything: with no `--scan` it takes the newest stored scan, and it errors when the scan kept no evidence instead of writing an empty document.
+
 ## Sharing an engagement safely
 
 `lumos export DB OUT` writes a **pseudonymised copy**: every address becomes a documentation-range address, every hostname a `host-<hash>.example`, every MAC a locally-administered `02:00:...` one, and stored Nmap evidence is rewritten too so the raw XML cannot leak what the tables no longer hold.

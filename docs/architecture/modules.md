@@ -13,11 +13,11 @@ flowchart LR
     P4["lumos.services"]
     P5["lumos.tui"]
     P0 -->|"1 imports"| P1
-    P1 -->|"14 imports"| P2
+    P1 -->|"15 imports"| P2
     P1 -->|"2 imports"| P3
     P1 -->|"9 imports"| P4
     P1 -->|"3 imports"| P5
-    P2 -->|"7 imports"| P3
+    P2 -->|"8 imports"| P3
     P3 -->|"4 imports"| P2
     P4 -->|"33 imports"| P2
     P4 -->|"4 imports"| P3
@@ -58,6 +58,7 @@ flowchart LR
 | `lumos.core.nmap.runner` | `lumos.core.scope` |
 | `lumos.core.nmap.runner` | `lumos.core.text` |
 | `lumos.core.nmap.xml_stream` | `lumos.core.text` |
+| `lumos.core.reports` | `lumos.core.nmap.xml_stream` |
 | `lumos.core.scan_store` | `lumos.core.nmap.runner` |
 | `lumos.core.scan_store` | `lumos.core.nmap.xml_stream` |
 | `lumos.core.scanning` | `lumos.core.nmap.iflist` |
