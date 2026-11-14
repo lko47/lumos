@@ -173,6 +173,20 @@ class SanitizeTests(unittest.TestCase):
             conn.close()
         self.assertEqual(len(values), len(set(values)))
 
+    def test_a_pseudonym_is_never_an_original_value(self) -> None:
+        """Both sides live in the documentation ranges, so this can collide."""
+        mapping = sanitize.build_mapping(sqlite3.connect(self.src), self._engagement())
+        originals = set(mapping)
+        self.assertEqual(originals & set(mapping.values()), set())
+        self.assertEqual(len(set(mapping.values())), len(mapping.values()))
+
+    def _engagement(self) -> str:
+        conn = sqlite3.connect(self.src)
+        try:
+            return str(conn.execute("SELECT id FROM engagement LIMIT 1").fetchone()[0])
+        finally:
+            conn.close()
+
     def test_it_refuses_to_overwrite_its_source_or_an_existing_file(self) -> None:
         with self.assertRaises(sanitize.SanitizeError):
             sanitize.export_sanitised(self.src, self.src, overwrite=True)

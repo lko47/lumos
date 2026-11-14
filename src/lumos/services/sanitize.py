@@ -172,15 +172,22 @@ def _collect(conn: sqlite3.Connection) -> dict[str, set[str]]:
 def build_mapping(conn: sqlite3.Connection, engagement_id: str) -> dict[str, str]:
     """Original value -> pseudonym, deterministic per engagement and value."""
     salt = _salt(engagement_id)
+    collected = _collect(conn)
+    # A pseudonym must not equal any original value: both live in the same
+    # documentation ranges, so a rewrite that lands on another host's real
+    # address would leave that address in the export. The proof pass caught this
+    # roughly one run in ten before the originals were excluded.
+    originals = {value for values in collected.values() for value in values}
+    used: set[str] = set()
     mapping: dict[str, str] = {}
-    for kind, values in _collect(conn).items():
+    for kind, values in collected.items():
         for value in sorted(values):
             candidate = _pseudonym(salt, kind, value)
-            # A collision would merge two hosts into one; probe deterministically.
             attempt = 0
-            while candidate in mapping.values():
+            while candidate in used or candidate in originals:
                 attempt += 1
                 candidate = _pseudonym(salt, kind, f"{value}#{attempt}")
+            used.add(candidate)
             mapping[value] = candidate
     return mapping
 
@@ -348,7 +355,7 @@ def export_sanitised(
     if leaks:  # pragma: no cover - only reachable if a new column escapes TEXT_COLUMNS
         raise SanitizeError(
             f"the export still carries {len(leaks)} original value(s);"
-            " add the column to TEXT_COLUMNS"
+            " the rewrite and the proof disagree, so nothing was shipped"
         )
     return SanitizeStats(
         addresses=counts["ipv4"] + counts["ipv6"],

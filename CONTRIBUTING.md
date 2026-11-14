@@ -42,6 +42,33 @@ revision, and a bypass is a bug, not a shortcut.
 - A test that only checks the columns you already thought of will pass while the
   feature leaks. Assert the property, not the implementation.
 
+## Screenshots
+
+`docs/screenshots/*.svg` are generated, never hand-captured:
+
+```sh
+python3 -m venv /tmp/shot && /tmp/shot/bin/pip install pyte
+PYTHONPATH=src /tmp/shot/bin/python scripts/make_screenshot.py --out docs/screenshots/map.svg
+PYTHONPATH=src /tmp/shot/bin/python scripts/make_screenshot.py --out docs/screenshots/scans.svg --keys s
+```
+
+Regenerate them when the layout changes. `tests/test_screenshots.py` fails if a
+committed image stops coming from demo data or contains a private address.
+
+## Real engines
+
+`tests/test_real_engines.py` runs naabu and rustscan against 127.0.0.1 and skips
+when the binary is absent, so CI stays hermetic while a laptop can check the
+parsers against real output:
+
+```sh
+PATH="$HOME/go/bin:$HOME/.cargo/bin:$PATH" PYTHONPATH=src \
+    python3 -m unittest tests.test_real_engines -v
+```
+
+masscan needs `CAP_NET_RAW` and cannot be exercised this way; treat its parser as
+the least-proven one.
+
 ## Commits
 
 One slice per commit, message says what was verified and how. If a claim was not
