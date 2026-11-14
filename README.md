@@ -15,18 +15,73 @@ The project name is provisional. No game assets, names, or layouts are used.
 - Scan only authorized targets. Lumos checks targets against engagement-wide allow and exclude rules before starting Nmap. An out-of-scope override requires the exact displayed phrase and is recorded.
 - Nmap XML and imported databases are untrusted input. Protect engagement files with OS permissions, access controls, and disk encryption. Do not store credentials in notes or scan scripts.
 
-## Current status: MVP interface (v0.2)
+## Current status
 
-Implemented: schema-v2 database creation, upgrade, and checks; scope rules; Nmap version discovery, safe argument-vector execution, streamed XML parsing and persistence; exact-hostname allowlisting before Nmap-based hostname resolution; scan audit/provenance and compressed raw XML evidence; bounded Nmap XML import; Markdown report; and a bounded, read-only map/host/scan TUI. Bare `lumos` opens the interface; `lumos DATABASE` opens that engagement, and the old `lumos tui DATABASE` still works. `LUMOS_DB` supplies a default database.
+Version 0.2.0. The planned feature set is implemented; the remaining gaps are
+release work (a public screenshot, a scale benchmark, a second review of the
+newer parsers), not missing features. Everything below is exercised by the test
+suite unless it says otherwise.
 
-The interface is mouse-first as well as keyboard-first, and it moves: three slow dots travel outward along every link, coloured by how well the path is known: green measured (traceroute or a directly observed host), amber inferred with confidence, red weak inference or an unknown hop, cyan local interface; manual and imported links never move, and while motion is on the links themselves are drawn solid so the dots read as traffic rather than as a trail of static dots (`a` restores the dotted evidence styles) nodes that appear in a new snapshot blink in with a short ripple, and a liveness strip in the footer advances once a second from real event counts (`a` turns motion off, which is also what a screen reader or a `script(1)` capture wants). tabs, map nodes, hosts and scans table rows, footer hints, dialog fields and their Save/Cancel line are all clickable, the wheel zooms the map at the pointer and scrolls the lists, dragging the map pans it (arrow keys and HJKL pan too, `0` recentres), and every mouse action has a keyboard equivalent. The TUI has three tabs (`m` map, `v` hosts, `s` scans, `Tab` cycles), a durable keyboard identity, a command palette (`:`), a help overlay (`?`), incremental search (`/`), and manual refresh (`r`). The map draws only stored `topology_edges` (Nmap-observed or explicitly marked inferred), using a tested 2-by-4 Unicode braille rasterizer with per-edge-type patterns and an ASCII line fallback (`LUMOS_ASCII=1` forces it). Node placement is a deterministic ring layout keyed on a blake2b hash of the node id, so new discoveries never reshuffle existing nodes; the viewport supports zoom (`+`/`-`), pan (`H`/`J`/`K`/`L`), and reset (`0`). The detail sidebar lists addresses, OS, open ports per node, hop distance, review flags, and — for the scanner root — any vantage interfaces saved by `lumos interfaces --save`. Edge selection shows provenance, confidence, and timestamps. The scans tab lists recent scans with status, host counts, elapsed time, and targets, read from a bounded projection of the scans table.
+| Area | State | How it is known |
+| --- | --- | --- |
+| Database, schema, migrations | done | schema tests, `lumos db check`, forward-only upgrade tests |
+| Scope guard | done | every scan path is scope-checked; out-of-scope targets are refused with a typed phrase |
+| Nmap scanning | done, real binary | run against the installed Nmap, XML streamed and stored as compressed evidence |
+| masscan, naabu, rustscan | **parsers only** | output recorded as fixtures and replayed through a fake binary; **never run against the real tools here** |
+| Import of external Nmap XML | done | hostile-input tests: doctype rejected, depth/bytes bounded, truncation reported |
+| Map and TUI | done | PTY-driven tests for keys, mouse and dialogs; three themes plus `NO_COLOR` |
+| Notes, tags, pins, review queue | done | service tests plus PTY dialogs |
+| Manual nodes and links | done | survive inference rebuilds; CLI and `u` in the interface |
+| Duplicate proposals | done | merge/reject recorded as events; identity is never merged automatically |
+| Compare, queue, target files | done | per-feature tests; a queue is an intention, not a measurement |
+| Exports | done | markdown, svg, json, csv, html, dot, mermaid, stored nmap-xml |
+| Pseudonymised export | done | schema-wide rewrite plus a byte-level proof pass |
+| Plugins | done | exporters and themes, versioned, per-file isolation |
+| Profiles | done | JSON profiles; a profile cannot redefine a built-in or smuggle a refused flag |
+| Packaging | done | `pipx install .`, zipapp, man page, Apache-2.0 licence |
+| Interactive latency | measured as a pure function only | see `docs/BENCHMARKS.md`; frame latency in a real terminal is not measured |
+| Scale | not measured | nothing above an 11-host demo has been benchmarked |
 
-Colour is semantic rather than hard-coded: themes `aurora`, `ember`, and `matrix` degrade to 16-colour palettes, and `NO_COLOR` selects a monochrome theme that keeps hierarchy through weight and reverse video only. `LUMOS_THEME` selects the starting theme. While open, the TUI detects committed database changes from concurrent scans and refreshes the map/status; scan batches become visible after their SQLite commit. The standalone `lumos interfaces` command reads local interface and route information from the installed Nmap's `--iflist` option and provides text or JSON output; it does not scan targets. `lumos interfaces --save` records those interfaces on the engagement's vantage point. The TUI launches scans from the `S` form (preset, targets, network, interface, evidence) after a review step that shows the exact argv and the scope verdict; progress streams in a panel from Nmap's `taskprogress` element and `Esc` twice cancels, keeping the hosts already written. Creating a database (`N`), editing scope (`P`), importing XML (`I`), writing reports (`R`), database checks/upgrade/rebuild/merge/interfaces (`T`), and an event log (`!`) are all reachable from the map, and each is also a command in the `:` palette. The CLI and the interface call the same functions in `services/actions.py`, so both front ends behave identically. The **scan** command displays the final Nmap command before execution. User-specified Nmap `-oN` and `-oG` output files are retained alongside Lumos's XML stream. An `-oX` or `-oA` manual option conflicts with XML-on-stdout and is rejected with an explanation.
+**Not implemented by design:** `-oX`/`-oA`/`-iL`/`--script` (refused — they write a
+second artefact or read targets behind the scope guard), setuid or polkit
+elevation, Windows support, and an NSE script browser. **Not implemented yet:**
+line-by-line Nmap stderr in the interface, scheduled scans, and pcap replay.
 
-The TUI remains a prototype: it watches committed snapshots and streams `<taskprogress>` updates, but it does not show Nmap stderr line by line, save node positions, edit topology, or provide review and notes panels. Mouse, keyboard and drag/zoom panning are all implemented. Idle CPU measured 0.02 s over a 5 s idle window (0.4% of one core) in a 110x32 PTY on Python 3.14.9; resize, colour, SSH, and tmux coverage and the Python 3.10 run are still outstanding. A scan queue and a notes editor, manual topology editing, HTML/CSV/JSON exports, plugins, scheduling, and a config file beyond `LUMOS_DB` are not implemented. Four engines can enumerate: **Nmap** (services, OS, traceroute), **masscan** (XML import or a direct run), **naabu** (JSON lines) and **rustscan** (greppable text). Each runs through the same scope guard, audit trail and database; naabu and rustscan output is normalised into Nmap-shaped XML rather than teaching the schema three formats, so there is one evidence path, and `<nmaprun scanner=...>` records which tool produced the rows. `,` opens the enumeration settings page, a checkbox per engine with its resolved path or `not installed`; a disabled engine is refused before its binary runs, and the scan dialog only offers engines that are both installed and switched on. masscan needs raw-socket privileges, and neither masscan, naabu nor rustscan reports services or OS details. Ping discovery (`-sn`) is available as a preset and as a manual option: it records hosts and nothing else, which is the "who is on my network" question, and it refuses to combine with any port or version probe. Targets can come from a file with `--target-file FILE` (blank lines and `#` comments ignored, duplicates collapsed, 4096 entries max); Nmap's own `-iL` is deliberately refused, because Lumos reads the list itself so every line passes the same scope check as a typed target — a file containing one out-of-scope address blocks the whole scan with the usual typed phrase. `-oX`/`-oA` stay refused in manual options: they would write a second XML file next to the stream Lumos parses, so `-oN`/`-oG` are the supported additional outputs.
+The interface: mouse-first and keyboard-first. Three slow dots travel outward
+along every link, coloured by how well the path is known — green measured
+(traceroute or a directly observed host), amber inferred, red weak inference or an
+unknown hop, cyan local interface. Manual and imported links never move, because
+motion is a claim about direction. New nodes blink in with a short ripple, and a
+liveness strip advances once a second from real event counters, never a random
+number (`a` turns motion off, which is also what a screen reader or `script(1)`
+capture wants). Tab switching, map nodes, table rows, footer hints and dialog
+fields are clickable; the wheel zooms at the pointer and scrolls lists; dragging
+pans. `0` recentres and every mouse action has a keyboard equivalent.
 
-Nmap progress flags are enabled for builds that support `--stats-every` (7.60 or newer, or when the flag appears in the help text) and are read from the `<taskprogress>` elements Nmap writes into the XML stream; on older builds the panel shows elapsed time and a plain working indicator instead. Traceroute topology must not be inferred from the current default connect scan; Nmap documents that traceroute is incompatible with `-sT`.
+The map draws only stored `topology_edges`, using a tested braille rasterizer with
+per-edge-type patterns and an ASCII fallback (`LUMOS_ASCII=1` forces it). Node
+placement is a deterministic ring keyed on a blake2b hash of the node id, so new
+discoveries never reshuffle existing nodes. The detail sidebar lists addresses, OS,
+open ports, hop distance, review flags and, for the scanner root, the interfaces
+saved by `lumos interfaces --save`. Edge selection shows provenance, confidence and
+timestamps.
 
+Colour is semantic rather than hard-coded: themes `aurora`, `ember` and `matrix`
+degrade to 16-colour palettes, and `NO_COLOR` selects a monochrome theme that keeps
+hierarchy through weight and reverse video. `LUMOS_THEME` picks the starting theme;
+plugins can add palettes but cannot replace a built-in one.
+
+The interface watches committed snapshots, so a concurrent scan appears after its
+SQLite commit. Scan progress streams from Nmap's `<taskprogress>` element when the
+installed build supports `--stats-every` (7.60+); older builds show elapsed time
+and a working indicator. `Esc` twice cancels a running scan, keeping the hosts
+already written. Traceroute-driven topology is not inferred from the default
+connect scan, because Nmap documents that `-sT` cannot produce it.
+
+Every surface — creating a database (`N`), scope (`P`), XML import (`I`), reports
+(`R`), database tools (`T`) and the event log (`!`) — is reachable from the map, from
+the `:` palette, and from the CLI. Both front ends call the same functions in
+`services/actions.py`.
 ### Keys worth knowing
 
 | Key | Action |
@@ -255,11 +310,22 @@ The history has been rewritten once for this reason (`git filter-repo`, force-pu
 
 ## Development status and project hygiene
 
-Phase 1 established the merge-ready schema, migration entry point, database validation, synthetic Nmap XML fixtures, and an offline fake Nmap executable. Phase 2 adds the headless scan/import/report path. CI and unit tests do not run scans or require network access. Python 3.10 and a real Nmap scan have not yet been verified in this environment.
+CI and unit tests do not run scans and require no network access: they replay recorded
+fixtures through a fake Nmap executable. The Nmap path itself has been exercised
+against a real Nmap 7.993 binary on this machine and on `127.0.0.1`; **masscan,
+naabu and rustscan have only ever been exercised through their parsers and fake
+binaries, never against the real tools**, and that is the most important
+unverified surface in the project. Python 3.10 is now covered: CI runs the suite
+on 3.10 and 3.14, and both are green.
 
 `bench/map_benchmark.py` builds synthetic 10k/100k-host engagements and reports load and frame timings; it is a development tool and needs no network or Nmap access. Results on this machine (Python 3.14.9, 8 CPUs) are recorded in the project plan rather than in CI.
 
-Coding standard: the mechanical subset of the JSF-AV C++ rules is enforced by `python3 scripts/check_standards.py` with a shrink-only baseline, and every deviation is recorded in [`docs/standards/JSF-AV-ALIGNMENT.md`](docs/standards/JSF-AV-ALIGNMENT.md).
+Coding standard: a mechanical subset of the JSF-AV C++ rules — function length,
+parameter count, line length, declarations — is enforced by
+`python3 scripts/check_standards.py` with a shrink-only baseline, and every
+deviation is recorded in [`docs/standards/JSF-AV-ALIGNMENT.md`](docs/standards/JSF-AV-ALIGNMENT.md).
+This is a style floor borrowed from an avionics C++ standard, not a claim of
+JSF-AV conformance: automated code is not flight software.
 
 Architecture diagrams — context, layers, scan and merge sequences, threads, the
 schema split into four ER diagrams, the inference rules and the module import
@@ -267,14 +333,22 @@ graph — live in [`docs/architecture/README.md`](docs/architecture/README.md).
 
 What this tool is checked against, what the checks actually enforce, and which
 claims are *not* verified: [`docs/SECURITY-COMPLIANCE.md`](docs/SECURITY-COMPLIANCE.md)
-(JSF-AV ratchet, OWASP Top 10 mapping, MITRE ATT&CK technique mapping, privacy
-guards).
+(JSF-AV ratchet, an OWASP Top 10 reading, the MITRE ATT&CK techniques the output
+documents, privacy guards). Those mappings are an argument about how the tool is
+built, not a certification.
 The ER and module diagrams are generated by `scripts/gen_erd.py` and
 `scripts/gen_modules.py`; `tests/test_architecture.py` fails when a committed
 copy is stale or when `core` imports `tui`, `cli` or `plugins`.
 
-**No license has been selected.** There is no `LICENSE` file in the repository or in its history, so the default is "all rights reserved": you may read the code, but you have no legal right to use, copy, modify or distribute it until a license is added. This is a deliberate gap to close before any public announcement rather than an oversight, and it needs the copyright holder's decision — MIT and Apache-2.0 are the usual candidates for a tool like this; Apache-2.0 adds an explicit patent grant.
+## License
 
-`NOTICE` records the one attribution this project does owe: Lumos runs the user's own Nmap, is not affiliated with the Nmap Project, and does not bundle or download Nmap. Nmap is a separate program under its own license and trademarks.
+Apache License 2.0 — see `LICENSE`. You may use, modify and redistribute this
+code, including commercially, provided you keep the licence and `NOTICE` with any
+redistribution and state what you changed. The licence includes an explicit
+patent grant and a trademark clause: it grants no rights to the name "Lumos".
+
+`NOTICE` records the one attribution this project does owe: Lumos runs the user's
+own Nmap, is not affiliated with the Nmap Project, and does not bundle or download
+Nmap. Nmap is a separate program under its own licence and trademarks.
 
 Security reports go through a private advisory; see `SECURITY.md`.

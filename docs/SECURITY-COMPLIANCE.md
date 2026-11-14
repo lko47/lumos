@@ -5,6 +5,13 @@ enforce, and where the gaps are. It is written for the person who has to defend
 using this tool on a real engagement — an auditor, a client, or a future
 maintainer who needs to know which claims are backed by a test.
 
+Three claims in this document are about *readings*, not certification: the JSF-AV
+section adapts an avionics C++ standard to a different language and discipline,
+the OWASP section is a mapping of one local CLI onto categories written for web
+services, and the ATT&CK section lists the techniques Lumos *output* documents
+rather than techniques it performs. Read them as design arguments with evidence,
+and challenge any row whose evidence column does not convince you.
+
 Run everything below with:
 
 ```sh

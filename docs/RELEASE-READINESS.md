@@ -17,6 +17,7 @@ is the current state, not a to-do that has been quietly completed.
 
 | Item | State |
 | --- | --- |
+| Licence | Apache-2.0 (`LICENSE`), declared in `pyproject.toml`, attribution in `NOTICE` |
 | `pipx install .` / `uv tool install .` | works; pyproject with no runtime dependencies |
 | zipapp | `python3 scripts/build_zipapp.py` → `dist/lumos.pyz`, ~186 KiB, runs `--version`, `demo` and `report` on a clean interpreter |
 | Checksums | `dist/SHA256SUMS` written by the same script |
@@ -52,10 +53,11 @@ scale number is claimed.
 | Item | Why |
 | --- | --- |
 | README screenshots | no terminal rasteriser is available in this environment; the demo database that would feed them exists (`lumos demo`) |
-| Large-engagement scale test | not run; the benchmark table says so rather than extrapolating |
+| ~~Large-engagement scale test~~ | **measured**: `docs/BENCHMARKS.md` has 10,000 and 100,000-host runs from `bench/map_benchmark.py` (frame 16.9 ms and `rebuild_inferred` 18 s at 100k) |
 | Privilege elevation | `-sS`/`-sU` require Lumos itself to hold the capability; there is no setuid or polkit helper, by design |
 | Windows support | terminal interface targets POSIX; not attempted |
 | NSE script browser | script output is stored and displayed, but there is no per-script explorer |
+| Real masscan/naabu/rustscan runs | their parsers replay recorded fixtures only; no real binary has ever been run through Lumos |
 | Git history object purge | old revisions are unreachable by ref, but only a repository reset or a GitHub support request removes them from the server's cache |
 
 ## Refusals worth knowing

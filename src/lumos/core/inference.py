@@ -102,6 +102,7 @@ class _Plan:
     edges: list[tuple[str, str, str, float, dict]] = field(default_factory=list)
     hubs: dict[tuple[int, int, int], _Network] = field(default_factory=dict)
     memberships: list[tuple[str, str]] = field(default_factory=list)  # (zone_id, node_id)
+    hops: set[str] = field(default_factory=set)  # placeholder node ids this pass still needs
 
 
 def _mask(version: int, prefixlen: int) -> int:
@@ -137,6 +138,12 @@ def _parse_address(text: str) -> tuple[int, int] | None:
 
 
 def _usable_interface(name: str, iface_type: str, family: int, prefixlen: int | None, address: str) -> bool:
+    """True only for an interface that describes a real segment.
+
+    The rules exist so the map does not grow a hub nobody can be on: loopback,
+    host routes and link-local ranges are all excluded, which is why a
+    ``fe80::/64`` or a ``127.0.0.1/32`` must never appear as a hub.
+    """
     if not address or prefixlen is None or family not in (4, 6):
         return False
     lowered = name.lower()
@@ -146,7 +153,12 @@ def _usable_interface(name: str, iface_type: str, family: int, prefixlen: int | 
         return False
     if family == 6 and prefixlen >= 128:
         return False
-    return True
+    try:
+        parsed = ipaddress.ip_address(address.split("/", 1)[0])
+    except ValueError:
+        return False
+    # 127.0.0.0/8, ::1, 169.254.0.0/16 and fe80::/10 are not segments.
+    return not (parsed.is_loopback or parsed.is_link_local)
 
 
 def _is_virtual(name: str) -> bool:
@@ -474,6 +486,10 @@ def _plan_vantage(
             by_address.setdefault((version, address), host)
 
     placeholder_nodes: dict[tuple[int, int], str] = {}
+    # Placeholder hops are re-derived every pass, so the plan remembers which
+    # ones it still needs. Without this a gateway that is scanned later leaves
+    # its hollow twin behind and the map shows the same address twice.
+    live_hops = plan.hops
 
     def gateway_node(gateway: str) -> str:
         parsed_address = _parse_address(gateway)
@@ -492,6 +508,7 @@ def _plan_vantage(
             (ids.node_id(uid, "unknown_hop", key), engagement_id, key, gateway, now),
         )
         placeholder_nodes[parsed_address] = ids.node_id(uid, "unknown_hop", key)
+        live_hops.add(placeholder_nodes[parsed_address])
         return placeholder_nodes[parsed_address]
 
     # Proxy ARP: many addresses sharing one MAC is a router answering for all of
@@ -739,6 +756,7 @@ def _rebuild(conn: sqlite3.Connection, *, now: str | None = None) -> RebuildStat
     else:
         conn.execute("DELETE FROM zone_memberships WHERE author = 'lumos'")
     removed_hubs = _prune_hubs(conn, engagement_id, kept_hubs)
+    _prune_hops(conn, engagement_id, plan.hops)
 
     return RebuildStats(
         hubs=len(plan.hubs),
@@ -773,11 +791,51 @@ def _prune(conn: sqlite3.Connection, table: str, engagement_id: str, keep: set[s
     return max(0, int(before) - int(after))
 
 
+def _prune_hops(conn: sqlite3.Connection, engagement_id: str, keep: set[str]) -> int:
+    """Delete placeholder hops this pass no longer needs, and their edges."""
+    rows = conn.execute(
+        "SELECT id FROM topology_nodes WHERE engagement_id = ? AND kind = 'unknown_hop'",
+        (engagement_id,),
+    ).fetchall()
+    stale = []
+    for row in rows:
+        node_id = str(row[0])
+        if node_id in keep:
+            continue
+        # Only an orphan is removed: a placeholder still carrying an edge is a
+        # live claim, even if this pass did not re-derive it.
+        attached = conn.execute(
+            "SELECT 1 FROM topology_edges WHERE from_node_id = ? OR to_node_id = ? LIMIT 1",
+            (node_id, node_id),
+        ).fetchone()
+        if attached is None:
+            stale.append(node_id)
+    for node_id in stale:
+        conn.execute(
+            "DELETE FROM topology_edges WHERE from_node_id = ? OR to_node_id = ?",
+            (node_id, node_id),
+        )
+        conn.execute("DELETE FROM topology_nodes WHERE id = ?", (node_id,))
+    return len(stale)
+
+
 def _prune_hubs(conn: sqlite3.Connection, engagement_id: str, keep: set[str]) -> int:
     rows = conn.execute(
         "SELECT id FROM zones WHERE engagement_id = ? AND derived = 1", (engagement_id,)
     ).fetchall()
-    stale = [str(row[0]) for row in rows if str(row[0]) not in keep]
+    stale = []
+    for row in rows:
+        node_id = str(row[0])
+        if node_id in keep:
+            continue
+        # Only an orphan is removed: a placeholder still carrying an edge is a
+        # live claim, even if this pass did not re-derive it.
+        attached = conn.execute(
+            "SELECT 1 FROM topology_edges WHERE from_node_id = ? OR to_node_id = ? LIMIT 1",
+            (node_id, node_id),
+        ).fetchone()
+        if attached is None:
+            stale.append(node_id)
     for zone_id in stale:
         node = conn.execute(
             "SELECT id FROM topology_nodes WHERE engagement_id = ? AND kind = 'zone' AND entity_id = ?",
