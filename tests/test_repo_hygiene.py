@@ -130,8 +130,11 @@ class PersonalDataTests(unittest.TestCase):
     PRIVATE = re.compile(
         r"\b(?:10|127|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"
     )
+    # Deliberately fake addresses: the checker's own allowlist has to spell out
+    # the placeholders it tolerates, and it is the same list either side.
     PLACEHOLDERS = {
         "10.0.0.1", "10.0.0.2", "10.0.0.5", "10.0.0.6", "10.0.0.9",
+        "10.0.0.10", "10.0.0.11", "10.0.0.12", "10.0.0.13", "10.0.0.20",
         "10.9.9.9", "127.0.0.1", "127.0.0.0",
     }
 
