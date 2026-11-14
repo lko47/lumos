@@ -40,6 +40,7 @@ from ..core.reports import (
     write_svg_report,
 )
 from ..core.scan_store import ScanStoreError, reconcile_interrupted_scans
+from . import profiles
 from ..core.scanning import ScopeConfirmationRequired, scan_database
 from ..core.scope import is_target_in_scope, parse_target
 from ..core.scope_store import add_scope_rule, ensure_network, get_network, read_scope_rules
@@ -245,7 +246,7 @@ def preview_scan(
     targets: Sequence[str],
     *,
     network: str,
-    preset: str = "discover",
+    preset: str = "connect",
     extra_options: str = "",
 ) -> ActionResult:
     """Check scope before a scan is offered for confirmation."""
@@ -261,7 +262,7 @@ def preview_scan(
         rules = read_scope_rules(database, engagement_id)
         outside = [target for target in cleaned if not is_target_in_scope(target, rules).allowed]
         phrase = "SCAN OUT OF SCOPE: " + ", ".join(sorted(set(outside))) if outside else ""
-        options = f"{SCAN_PRESETS.get(preset, '')} {extra_options}".strip()
+        options = profiles.options_for(SCAN_PRESETS, preset, extra_options)
         return _ok(
             "in scope" if not outside else f"{len(outside)} target(s) outside scope",
             payload={

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..core import engine_scan, engines
-from ..services import actions
+from ..services import actions, profiles
 from . import forms
 from . import mouse
 from .widgets import (
@@ -440,7 +440,7 @@ def flow_scan(
             forms.Field("network", "network", value="default"),
             forms.Field(
                 "preset", "preset", value="connect", kind="choice",
-                choices=("connect", "service", "udp", "custom"),
+                choices=profiles.choices(actions.SCAN_PRESETS),
             ),
             forms.Field("options", "options", hint="extra Nmap options"),
             forms.Field("interface", "interface", value="auto", kind="choice", choices=_interface_choices()),

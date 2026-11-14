@@ -193,6 +193,23 @@ for likely, one-on/five-off for weak) while measured and local links stay solid,
 labels hubs with their CIDR and member count, and repeats the caveat in the
 image and its description.
 
+## What the scanner cannot see
+
+Two kinds of human knowledge are stored as claims, not observations, and neither is ever overwritten by a scan:
+
+- **Manual nodes and links** — `lumos manual DB --add "console-only switch" --note "no management IP"`, then `--link FROM TO`. In the interface, `u` adds a node. Manual nodes survive every inference rebuild; manual links are drawn bold (DOT/Mermaid) because a human asserted them.
+- **Duplicate proposals** — when two observations share an address or hostname, Lumos records a proposal and merges nothing. `lumos duplicates DB` lists them; `--accept ID` merges the two devices into one (re-pointing every observation, keeping both), `--reject ID` keeps them apart. In the interface, `d`. A merge rebuilds the derived topology afterwards.
+
+## Scan profiles
+
+`~/.config/lumos/profiles.json` (or `LUMOS_PROFILES`) adds named profiles on top of the built-ins:
+
+```json
+{"profiles": {"quick-web": {"options": "-sT -p 80,443", "description": "just the web ports"}}}
+```
+
+They appear in the scan form's preset list. A profile cannot redefine a built-in name, and options using `-oX`, `-oA`, `-oN`, `-oG`, `-iL`, `-iR`, `--script` or `--script-args` are refused — those either write a second artefact or read targets behind the scope guard.
+
 ## Plugins
 
 Two kinds, both optional and both versioned: **exporter** plugins add a report format (`lumos report plugin DB OUT --name NAME`) and **theme** plugins add a palette (they join the `t` cycle). They load only from `LUMOS_PLUGIN_PATH` and `~/.config/lumos/plugins`; `lumos plugins` lists what would load and every refusal; `--no-plugins` or `LUMOS_NO_PLUGINS=1` turns the whole surface off.

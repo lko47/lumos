@@ -15,14 +15,14 @@ flowchart LR
     P0 -->|"1 imports"| P1
     P1 -->|"16 imports"| P2
     P1 -->|"2 imports"| P3
-    P1 -->|"9 imports"| P4
+    P1 -->|"11 imports"| P4
     P1 -->|"3 imports"| P5
     P2 -->|"8 imports"| P3
     P3 -->|"4 imports"| P2
-    P4 -->|"33 imports"| P2
+    P4 -->|"40 imports"| P2
     P4 -->|"4 imports"| P3
     P5 -->|"15 imports"| P2
-    P5 -->|"17 imports"| P4
+    P5 -->|"20 imports"| P4
 ```
 
 | importing module | imported module |
@@ -48,6 +48,8 @@ flowchart LR
 | `lumos.cli` | `lumos.services.actions` |
 | `lumos.cli` | `lumos.services.compare` |
 | `lumos.cli` | `lumos.services.demo` |
+| `lumos.cli` | `lumos.services.duplicates` |
+| `lumos.cli` | `lumos.services.manual` |
 | `lumos.cli` | `lumos.services.notes` |
 | `lumos.cli` | `lumos.services.queue` |
 | `lumos.cli` | `lumos.services.review` |
@@ -89,6 +91,13 @@ flowchart LR
 | `lumos.services.demo` | `lumos.core.nmap.xml_stream` |
 | `lumos.services.demo` | `lumos.core.scan_store` |
 | `lumos.services.demo` | `lumos.core.vantage_store` |
+| `lumos.services.duplicates` | `lumos.core.database` |
+| `lumos.services.duplicates` | `lumos.core.ids` |
+| `lumos.services.duplicates` | `lumos.core.inference` |
+| `lumos.services.duplicates` | `lumos.core.text` |
+| `lumos.services.manual` | `lumos.core.database` |
+| `lumos.services.manual` | `lumos.core.ids` |
+| `lumos.services.manual` | `lumos.core.text` |
 | `lumos.services.map_view` | `lumos.core.database` |
 | `lumos.services.map_view` | `lumos.core.evidence` |
 | `lumos.services.map_view` | `lumos.core.text` |
@@ -112,6 +121,8 @@ flowchart LR
 | `lumos.tui.app` | `lumos.core.text` |
 | `lumos.tui.app` | `lumos.services` |
 | `lumos.tui.app` | `lumos.services.actions` |
+| `lumos.tui.app` | `lumos.services.duplicates` |
+| `lumos.tui.app` | `lumos.services.manual` |
 | `lumos.tui.app` | `lumos.services.map_view` |
 | `lumos.tui.app` | `lumos.services.notes` |
 | `lumos.tui.app` | `lumos.services.path_view` |
@@ -124,6 +135,7 @@ flowchart LR
 | `lumos.tui.flows` | `lumos.core.engines` |
 | `lumos.tui.flows` | `lumos.services` |
 | `lumos.tui.flows` | `lumos.services.actions` |
+| `lumos.tui.flows` | `lumos.services.profiles` |
 | `lumos.tui.map_render` | `lumos.core.decisions` |
 | `lumos.tui.map_render` | `lumos.services.map_view` |
 | `lumos.tui.map_render` | `lumos.services.positions` |

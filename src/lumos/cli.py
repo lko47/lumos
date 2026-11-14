@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import shlex
@@ -32,7 +33,9 @@ from .core.vantage_store import save_interfaces
 from .core.scope import read_target_file
 from .core.scope_store import add_scope_rule
 from .core.xml_import import import_nmap_xml
-from .services import actions, compare, demo, notes, queue, review, sanitize, tags
+from .services import (
+    actions, compare, demo, duplicates, manual, notes, queue, review, sanitize, tags,
+)
 from .core import state as local_state
 
 AUTHORIZED_USE_NOTICE = "Authorized use only: scan systems and networks you own or are explicitly permitted to assess. Confirm scope and permissions before proceeding."
@@ -195,6 +198,29 @@ def _parser() -> argparse.ArgumentParser:
     note.add_argument("--list", action="store_true", dest="list_notes")
     note.add_argument("--operator", default=None)
 
+    manual_cmd = commands.add_parser(
+        "manual", help="record nodes and links the scanner cannot see"
+    )
+    manual_cmd.add_argument("database", type=Path)
+    manual_cmd.add_argument("--add", metavar="LABEL", default=None, help="add a manual node")
+    manual_cmd.add_argument("--type", default="device", choices=manual.NODE_TYPES)
+    manual_cmd.add_argument("--note", default="", help="description for --add, or note for --link")
+    manual_cmd.add_argument("--link", nargs=2, metavar=("FROM", "TO"), default=None)
+    manual_cmd.add_argument("--remove", metavar="NODE", default=None)
+    manual_cmd.add_argument("--unlink", metavar="EDGE", default=None)
+    manual_cmd.add_argument("--list", action="store_true")
+    manual_cmd.add_argument("--operator", default=getpass.getuser())
+
+    duplicates_cmd = commands.add_parser(
+        "duplicates", help="review, merge or dismiss duplicate-device proposals"
+    )
+    duplicates_cmd.add_argument("database", type=Path)
+    duplicates_cmd.add_argument("--accept", metavar="ID", default=None, help="merge the pair")
+    duplicates_cmd.add_argument("--reject", metavar="ID", default=None, help="keep them separate")
+    duplicates_cmd.add_argument("--include-decided", action="store_true")
+    duplicates_cmd.add_argument("--note", default="")
+    duplicates_cmd.add_argument("--operator", default=getpass.getuser())
+
     plugins_cmd = commands.add_parser(
         "plugins", help="list exporter and theme plugins that would load"
     )
@@ -297,7 +323,7 @@ def _open_default(path: Path | None) -> int:
 
 SUBCOMMANDS = frozenset(
     {"db", "scope", "interfaces", "scan", "import", "tui", "report", "note", "compare", "tag", "review", "queue", "export", "demo",
-        "plugins"}
+        "plugins", "manual", "duplicates"}
 )
 
 
@@ -375,6 +401,71 @@ def _run_scan(args: Any) -> int:
     if result.stderr:
         print(result.stderr, file=sys.stderr)
     return 0 if status == "completed" else 1
+
+
+def _run_manual(args: Any) -> int:
+    """Add, link, list or remove manual nodes without guessing at ids."""
+    try:
+        if args.add:
+            node = manual.add_node(
+                args.database, label=args.add, author=args.operator,
+                node_type=args.type, description=args.note,
+            )
+            print(f"added manual node {node.label!r} ({node.node_id[:8]})")
+            return 0
+        if args.link:
+            edge = manual.add_link(
+                args.database, from_node=args.link[0], to_node=args.link[1],
+                author=args.operator, note=args.note,
+            )
+            print(f"linked ({edge[:8]})")
+            return 0
+        if args.remove:
+            manual.remove_node(args.database, args.remove)
+            print("removed manual node")
+            return 0
+        if args.unlink:
+            manual.remove_link(args.database, args.unlink)
+            print("removed manual link")
+            return 0
+    except manual.ManualError as exc:
+        print(f"lumos: {exc}", file=sys.stderr)
+        return 2
+    nodes = manual.list_nodes(args.database)
+    links = manual.links(args.database)
+    for node in nodes:
+        print(f"{node.node_id}  {node.label}  [{node.node_type}]  {node.author}")
+    for edge, source, target in links:
+        print(f"{edge}  {source} -> {target}  [manual]")
+    if not nodes and not links:
+        print("no manual nodes or links")
+    return 0
+
+
+def _run_duplicates(args: Any) -> int:
+    """Decide a proposal; the decision is an event, never an edit."""
+    if args.accept or args.reject:
+        proposal_id = args.accept or args.reject
+        decision = "accepted_link" if args.accept else "rejected"
+        try:
+            merged = duplicates.decide(
+                args.database, proposal_id, decision,
+                author=args.operator, detail=args.note,
+            )
+        except duplicates.DuplicateError as exc:
+            print(f"lumos: {exc}", file=sys.stderr)
+            return 2
+        print("merged the two devices" if merged else "kept them separate")
+        return 0
+    proposals = duplicates.list_proposals(
+        args.database, include_decided=args.include_decided
+    )
+    for item in proposals:
+        state = item.decision or "open"
+        print(f"{item.id}  {item.summary}  [{state}]")
+    if not proposals:
+        print("no duplicate proposals")
+    return 0
 
 
 def _run_plugins(args: Any) -> int:
@@ -706,6 +797,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "compare": _run_compare, "note": _run_note, "tag": _run_tag,
             "review": _run_review, "queue": _run_queue_command,
             "export": _run_export, "demo": _run_demo, "plugins": _run_plugins,
+            "manual": _run_manual, "duplicates": _run_duplicates,
         }
         if args.command in simple:
             return simple[args.command](args)

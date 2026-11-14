@@ -18,7 +18,7 @@ from ..core.decisions import DecisionError, record_decision
 from ..core.text import sanitize_text
 from ..services import actions
 from ..services.map_view import MapSnapshot, MapSnapshotWatcher, load_map_snapshot, render_plain_snapshot
-from ..services import notes, positions, review, tags, workspace, path_view
+from ..services import duplicates, manual, notes, positions, review, tags, workspace, path_view
 from ..core import engines, plugins
 from . import theme
 from . import flows
@@ -60,6 +60,8 @@ _COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("report", "write a Markdown or SVG report", "report"),
     ("tools", "check, upgrade, rebuild, merge, interfaces", "tools"),
     ("log", "recent events; w saves them", "log"),
+    ("duplicates", "merge or dismiss duplicate-device proposals", "duplicates"),
+    ("manual", "add a node the scanner cannot see", "manual"),
     ("help", "keyboard reference", "help"),
     ("quit", "restore the terminal and exit", "quit"),
 )
@@ -458,6 +460,90 @@ def _review_panel(
         state.notify(str(exc))
         return False
     state.notify(f"{updated.reason_code}: {updated.state}")
+    return True
+
+
+_PANEL_KEYS = frozenset({ord("b"), ord("y"), ord("f"), ord("z"), ord("d"), ord("u")})
+
+
+def _panel_key(
+    key: int,
+    window: Any,
+    styles: dict[str, int],
+    unicode_ok: bool,
+    database: Path,
+    state: ViewState,
+    snapshot: MapSnapshot,
+    ctx: Any,
+) -> bool:
+    """Route the keys that open a panel; True when the map must be reloaded."""
+    if key == ord("d"):
+        return _duplicates_panel(window, styles, unicode_ok, database, state)
+    if key == ord("u"):
+        return _manual_node_prompt(window, styles, unicode_ok, database, state)
+    return _editing_key(key, state, snapshot, ctx)
+
+
+def _duplicates_panel(
+    window: Any, styles: dict[str, int], unicode_ok: bool, database: Path, state: ViewState
+) -> bool:
+    """Propose, then merge or keep separate; True to reload when merged."""
+    try:
+        proposals = duplicates.list_proposals(database)
+    except duplicates.DuplicateError as exc:
+        state.notify(str(exc))
+        return False
+    if not proposals:
+        state.notify("no duplicate proposals")
+        return False
+    picked = forms.choose(
+        window, styles, unicode_ok, "possible duplicates",
+        [f"{item.summary} ({item.short_id})" for item in proposals],
+        note="Enter picks a pair, then decide. Merging rewrites which device owns the evidence.",
+    )
+    if picked is None or not (0 <= picked < len(proposals)):
+        return False
+    item = proposals[picked]
+    choice = forms.choose(
+        window, styles, unicode_ok, "same device?",
+        ["merge into one device", "keep them separate"],
+        note=item.summary,
+    )
+    if choice is None or choice not in (0, 1):
+        return False
+    decision = "accepted_link" if choice == 0 else "rejected"
+    try:
+        merged = duplicates.decide(
+            database, item.id, decision, author=actions.default_operator()
+        )
+    except duplicates.DuplicateError as exc:
+        state.notify(str(exc))
+        return False
+    state.notify("merged the two devices" if merged else "kept them separate")
+    return bool(merged)
+
+
+def _manual_node_prompt(
+    window: Any, styles: dict[str, int], unicode_ok: bool, database: Path, state: ViewState
+) -> bool:
+    """Add a node the scanner cannot see; True to reload the map."""
+    label = forms.text_prompt(
+        window, styles, unicode_ok, "manual node",
+        forms.PromptOptions(
+            note="A name you would say out loud; the scanner did not see this node.",
+            max_chars=manual.MAX_LABEL,
+        ),
+    )
+    if not label:
+        return False
+    try:
+        node = manual.add_node(
+            database, label=label, author=actions.default_operator()
+        )
+    except manual.ManualError as exc:
+        state.notify(str(exc))
+        return False
+    state.notify(f"added manual node {node.label}; link it from the CLI with --link")
     return True
 
 
@@ -1011,8 +1097,9 @@ def _run_event_loop(ctx: UiContext, watcher: MapSnapshotWatcher) -> Path | None:
             theme_name = _cycle_theme(theme_name, capability)
             styles = theme.init_styles(theme_name, capability)
             state.notify(f"theme {theme_name} — {theme.THEME_DESCRIPTIONS.get(theme_name, '')}")
-        elif key in (ord("b"), ord("y"), ord("f"), ord("z")):
-            if _editing_key(key, state, snapshot, ctx):
+        elif key in _PANEL_KEYS:
+            if _panel_key(key, window, styles, unicode_ok, database, state, snapshot, ctx):
+                snapshot = load_map_snapshot(path)
                 watcher.reload_now()
                 _refresh_path(state, snapshot)
             dirty = True
