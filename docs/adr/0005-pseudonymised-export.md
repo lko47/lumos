@@ -1,0 +1,6 @@
+# ADR-005: Sharing means exporting a rewritten copy
+
+- **Status:** Accepted.
+- **Context:** Engagement databases contain somebody's network. Sharing one for a demo, a bug report or a review hands over addresses, hostnames and MACs, plus the raw Nmap XML, which is the most detailed copy of all.
+- **Decision:** `export_sanitised` copies the database and rewrites every TEXT column of every table - discovered from the live schema, not from a hand-written list - plus gzip-decoded evidence blobs, which are recompressed with a fresh length and sha256. Addresses map into the documentation ranges, hostnames to `host-<hash>.example`, MACs to locally-administered values. The mapping is `HMAC(engagement id, value)`: deterministic per engagement, so exports agree, and one-way. The source database is never opened for writing. The export is 0600, and after writing, its bytes are searched for every original value: a survivor raises instead of shipping.
+- **Consequences:** A shared database is safe to publish and still usable as a database. Reports generated from it agree with it. Determinism means an export can be regenerated and diffed. The first implementation rewrote eight named columns and leaked through eight others; the schema-driven rule is the fix, and the post-write proof is the guard.

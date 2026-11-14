@@ -1,0 +1,6 @@
+# ADR-007: Plugins are optional, versioned and boring
+
+- **Status:** Accepted.
+- **Context:** Extensibility is where a security tool usually loses its guarantees. A plugin that can alter the scope guard or the runner would make every promise in this repository conditional. Meanwhile a plugin that can only add a report format is genuinely useful.
+- **Decision:** Two kinds only: exporters (a new report format) and themes (a palette). A plugin is one file declaring `PLUGIN_API`, `PLUGIN_KIND` and `PLUGIN_NAME`, loaded only from directories the operator names (`LUMOS_PLUGIN_PATH`, `$XDG_CONFIG_HOME/lumos/plugins`). `--no-plugins` and `LUMOS_NO_PLUGINS=1` remove the surface. Validation is per file and fail-closed: wrong API version, unknown kind, bad name, missing entry point, duplicate name or a raising import produce one sentence and do not affect the other plugins. A symlink out of the plugin directory is ignored. A plugin theme cannot replace a built-in palette.
+- **Consequences:** No plugin can change what is scanned, what is in scope, or what an evidence export contains. Loading a plugin is running code with the operator's privileges - that is stated plainly in the docs, because no validation makes it safe; consent and an explicit directory are the actual control.

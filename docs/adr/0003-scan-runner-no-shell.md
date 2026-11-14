@@ -1,0 +1,6 @@
+# ADR-003: The runner is an argument list, and it refuses to write files
+
+- **Status:** Accepted.
+- **Context:** Lumos shells out to Nmap, Masscan, Naabu and Rustscan. Every one of those is a process that touches the network, and several can write files. A shell string would make target injection trivial and would make "here is exactly what will run" impossible to state honestly.
+- **Decision:** Every process is launched from an explicit argument list with no shell. Flags that write a second artefact (`-oX`, `-oA`, `-oN`, `-oG`) are refused, because Lumos consumes Nmap's stdout stream itself and a second copy on disk is an uncontrolled leak. Flags that read targets from a file (`-iL`) are refused, because the scope guard would not see them. Nmap scripts (`--script`) are refused: the tool documents exposure, it does not run plugins against targets. The exact argv is displayed and confirmed before a scan, stored with the scan row, and recorded in the audit log.
+- **Consequences:** The command an operator approved is the command that ran, byte for byte, and can be shown afterwards. A target can never become a flag. The cost is that some Nmap modes are unavailable through Lumos and must be run by hand.

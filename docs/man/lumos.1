@@ -1,0 +1,100 @@
+.TH LUMOS 1 "2026-11" "lumos 0.2.0" "User Commands"
+.SH NAME
+lumos \- terminal mapper for Nmap evidence
+.SH SYNOPSIS
+.B lumos
+[\fIPATH\fR] [\fB\-\-no\-plugins\fR]
+.br
+.B lumos
+\fICOMMAND\fR [\fIOPTIONS\fR]
+.SH DESCRIPTION
+.B lumos
+stores Nmap evidence in an SQLite engagement database, draws the topology in a
+terminal interface, and distinguishes what was measured from what was inferred.
+Running
+.B lumos
+with no arguments opens the most recent engagement; running it with a path opens
+that database. The interface is mouse-first: drag to pan, wheel to zoom, click to
+select.
+.SH COMMANDS
+.TP
+.B lumos db init \fIPATH\fR
+Create an empty engagement database.
+.TP
+.B lumos interfaces
+Show the scanner interfaces and routes Nmap reports with \fB--iflist\fR.
+.TP
+.B lumos tui \fIDB\fR
+Open the interactive map explicitly (plain text output when redirected).
+.TP
+.B lumos scope \fIDB\fR
+List, add or remove scope rules. Every scan is checked against them.
+.TP
+.B lumos scan \fIDB\fR \fITARGET\fR...
+Run a scope-checked enumerator and store the result.
+.TP
+.B lumos import \fIDB\fR \fIFILE.xml\fR
+Import Nmap XML, which is parsed as hostile input.
+.TP
+.B lumos report \fIFORMAT\fR \fIDB\fR \fIOUT\fR
+Write markdown, svg, json, csv, html, dot, mermaid or stored nmap-xml
+(\fB\-\-scan\fR \fIID\fR).
+.TP
+.B lumos compare \fIDB\fR
+Diff two scans by address.
+.TP
+.B lumos note \fIDB\fR \fB\-\-body\fR \fITEXT\fR
+Add an append-only note to the engagement, a node or an edge.
+.TP
+.B lumos tag \fIDB\fR \fB\-\-name\fR \fINAME\fR
+Tag the engagement, a node or an edge.
+.TP
+.B lumos review \fIDB\fR
+Work the review queue; inferred items are never presented as measured.
+.TP
+.B lumos manual \fIDB\fR \fB\-\-add\fR \fILABEL\fR | \fB\-\-link\fR \fIFROM\fR \fITO\fR
+Record nodes and links the scanner cannot see. They survive every rebuild.
+.TP
+.B lumos duplicates \fIDB\fR [\fB\-\-accept\fR \fIID\fR | \fB\-\-reject\fR \fIID\fR]
+Review duplicate-device proposals. Lumos never merges identity on its own.
+.TP
+.B lumos export \fIDB\fR \fIOUT\fR
+Write a pseudonymised copy: documentation-range addresses, \fI.example\fR
+hostnames, rewritten evidence. The source is untouched.
+.TP
+.B lumos demo \fIOUT\fR
+Write a generated engagement for documentation and screenshots. No real data.
+.TP
+.B lumos plugins
+List exporter and theme plugins that would load, and every refusal.
+.TP
+.B lumos queue \fIDB\fR
+Queue scans and run them in order.
+.SH FILES
+.TP
+.I ~/.config/lumos/plugins
+Plugin directory (exporter and theme modules).
+.TP
+.I ~/.config/lumos/profiles.json
+Additional scan profiles.
+.SH ENVIRONMENT
+.TP
+.B LUMOS_PLUGIN_PATH
+Path-separated plugin directories.
+.TP
+.B LUMOS_NO_PLUGINS
+Any truthy value disables plugins.
+.TP
+.B LUMOS_PROFILES
+Alternative scan-profile file.
+.TP
+.B LUMOS_THEME
+Starting theme name.
+.TP
+.B NO_COLOR
+Forces the monochrome theme.
+.SH EXIT STATUS
+0 success, 2 refused or invalid input, 130 interrupted.
+.SH SEE ALSO
+Nmap(1), and the documentation in the source tree: README.md, docs/PLUGINS.md,
+docs/ZENMAP-PARITY.md, docs/adr/.

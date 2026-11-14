@@ -15,8 +15,16 @@ jobs:
       PYTHONPATH: src
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the history guard inspects every revision
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
       - name: Run standard-library test suite
         run: python -m unittest discover -s tests -v
+      - name: Standards ratchet (AV rules, shrink-only baseline)
+        run: python scripts/check_standards.py
+      - name: Generated architecture diagram is current
+        run: python scripts/gen_modules.py --check
+      - name: No personal data in any revision
+        run: python scripts/check_history_pii.py
