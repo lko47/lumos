@@ -32,7 +32,7 @@ from .core.vantage_store import save_interfaces
 from .core.scope import read_target_file
 from .core.scope_store import add_scope_rule
 from .core.xml_import import import_nmap_xml
-from .services import actions, compare, notes, queue, review, tags
+from .services import actions, compare, demo, notes, queue, review, sanitize, tags
 from .core import state as local_state
 
 AUTHORIZED_USE_NOTICE = "Authorized use only: scan systems and networks you own or are explicitly permitted to assess. Confirm scope and permissions before proceeding."
@@ -135,6 +135,19 @@ def _parser() -> argparse.ArgumentParser:
     compare_cmd.add_argument("--to", dest="to_scan", default="", help="newer scan id or prefix")
     compare_cmd.add_argument("--list", action="store_true", dest="list_scans",
                              help="list completed scans")
+
+    demo_cmd = commands.add_parser(
+        "demo", help="write a generated demo engagement (no real data)"
+    )
+    demo_cmd.add_argument("output", type=Path)
+    demo_cmd.add_argument("--force", action="store_true", help="replace an existing file")
+
+    export_cmd = commands.add_parser(
+        "export", help="write a pseudonymised copy of an engagement"
+    )
+    export_cmd.add_argument("database", type=Path)
+    export_cmd.add_argument("output", type=Path)
+    export_cmd.add_argument("--force", action="store_true", help="replace an existing export")
 
     queue_cmd = commands.add_parser("queue", help="queue scans and run them in order")
     queue_cmd.add_argument("database", type=Path)
@@ -247,7 +260,7 @@ def _open_default(path: Path | None) -> int:
 
 
 SUBCOMMANDS = frozenset(
-    {"db", "scope", "interfaces", "scan", "import", "tui", "report", "note", "compare", "tag", "review", "queue"}
+    {"db", "scope", "interfaces", "scan", "import", "tui", "report", "note", "compare", "tag", "review", "queue", "export", "demo"}
 )
 
 
@@ -325,6 +338,37 @@ def _run_scan(args: Any) -> int:
     if result.stderr:
         print(result.stderr, file=sys.stderr)
     return 0 if status == "completed" else 1
+
+
+def _run_demo(args: Any) -> int:
+    """Write the synthetic engagement used by docs and screenshots."""
+    try:
+        stats = demo.build_demo(args.output, overwrite=args.force)
+    except demo.DemoError as exc:
+        print(f"lumos: {exc}", file=sys.stderr)
+        return 2
+    print(
+        f"wrote {stats.path}: {stats.hosts} host(s), {stats.scans} scan(s),"
+        f" {stats.zones} zone(s), {stats.nodes} node(s), {stats.edges} link(s)"
+        " (generated data)"
+    )
+    return 0
+
+
+def _run_export(args: Any) -> int:
+    """Write a sanitised copy and say what was rewritten."""
+    try:
+        stats = sanitize.export_sanitised(args.database, args.output, overwrite=args.force)
+    except sanitize.SanitizeError as exc:
+        print(f"lumos: {exc}", file=sys.stderr)
+        return 2
+    print(
+        f"wrote {args.output}: {stats.addresses} address(es),"
+        f" {stats.hostnames} hostname(s), {stats.macs} MAC(s), {stats.networks} network(s)"
+        f" rewritten in {stats.rewritten_values} field(s)"
+        + (f" and {stats.evidence_rewritten} evidence value(s)" if stats.evidence_rewritten else "")
+    )
+    return 0
 
 
 def _run_queue_command(args: Any) -> int:
@@ -592,6 +636,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         simple = {
             "compare": _run_compare, "note": _run_note, "tag": _run_tag,
             "review": _run_review, "queue": _run_queue_command,
+            "export": _run_export, "demo": _run_demo,
         }
         if args.command in simple:
             return simple[args.command](args)

@@ -15,12 +15,12 @@ flowchart LR
     P0 -->|"1 imports"| P1
     P1 -->|"14 imports"| P2
     P1 -->|"2 imports"| P3
-    P1 -->|"7 imports"| P4
+    P1 -->|"9 imports"| P4
     P1 -->|"3 imports"| P5
     P2 -->|"7 imports"| P3
     P3 -->|"4 imports"| P2
-    P4 -->|"27 imports"| P2
-    P4 -->|"2 imports"| P3
+    P4 -->|"33 imports"| P2
+    P4 -->|"4 imports"| P3
     P5 -->|"14 imports"| P2
     P5 -->|"17 imports"| P4
 ```
@@ -46,9 +46,11 @@ flowchart LR
 | `lumos.cli` | `lumos.services` |
 | `lumos.cli` | `lumos.services.actions` |
 | `lumos.cli` | `lumos.services.compare` |
+| `lumos.cli` | `lumos.services.demo` |
 | `lumos.cli` | `lumos.services.notes` |
 | `lumos.cli` | `lumos.services.queue` |
 | `lumos.cli` | `lumos.services.review` |
+| `lumos.cli` | `lumos.services.sanitize` |
 | `lumos.cli` | `lumos.services.tags` |
 | `lumos.cli` | `lumos.tui.app` |
 | `lumos.cli` | `lumos.tui.start` |
@@ -79,6 +81,12 @@ flowchart LR
 | `lumos.services.actions` | `lumos.core.vantage_store` |
 | `lumos.services.actions` | `lumos.core.xml_import` |
 | `lumos.services.compare` | `lumos.core.database` |
+| `lumos.services.demo` | `lumos.core.database` |
+| `lumos.services.demo` | `lumos.core.inference` |
+| `lumos.services.demo` | `lumos.core.nmap.iflist` |
+| `lumos.services.demo` | `lumos.core.nmap.xml_stream` |
+| `lumos.services.demo` | `lumos.core.scan_store` |
+| `lumos.services.demo` | `lumos.core.vantage_store` |
 | `lumos.services.map_view` | `lumos.core.database` |
 | `lumos.services.map_view` | `lumos.core.evidence` |
 | `lumos.services.map_view` | `lumos.core.text` |
@@ -90,6 +98,8 @@ flowchart LR
 | `lumos.services.queue` | `lumos.core.text` |
 | `lumos.services.review` | `lumos.core.database` |
 | `lumos.services.review` | `lumos.core.text` |
+| `lumos.services.sanitize` | `lumos.core.database` |
+| `lumos.services.sanitize` | `lumos.core.merge` |
 | `lumos.services.tags` | `lumos.core.database` |
 | `lumos.services.tags` | `lumos.core.text` |
 | `lumos.tui.app` | `lumos.core` |

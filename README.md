@@ -45,6 +45,7 @@ Nmap progress flags are enabled for builds that support `--stats-every` (7.60 or
 | `?` `:` `/` | help, command palette, search |
 | `lumos note DB "text" --node ID` | attach a note to a node (`--list` to read them back; the sidebar shows the newest) |
 | `lumos tag DB dmz --node ID` | tag a node (`--list`, `--remove`) |
+| `lumos export DB OUT` | pseudonymised copy for sharing (`--force` to replace) |
 | `lumos queue DB --add --network N TARGET` | queue scans (`--list`, `--remove ID`, `--clear`, `--run`) |
 | `lumos review DB [--decide ID --set confirmed]` | review queue and decisions |
 | `lumos scan DB --target-file FILE` | scope-checked targets from a file (`-sn` preset for discovery) |
@@ -191,6 +192,12 @@ measured; `lumos report svg DATABASE OUT.svg` draws them dotted (three-on/two-of
 for likely, one-on/five-off for weak) while measured and local links stay solid,
 labels hubs with their CIDR and member count, and repeats the caveat in the
 image and its description.
+
+## Sharing an engagement safely
+
+`lumos export DB OUT` writes a **pseudonymised copy**: every address becomes a documentation-range address, every hostname a `host-<hash>.example`, every MAC a locally-administered `02:00:...` one, and stored Nmap evidence is rewritten too so the raw XML cannot leak what the tables no longer hold.
+
+The mapping is deterministic per engagement (derived from the engagement id), so two exports agree and a host keeps its pseudonym between the database and a report, but nothing in the export recovers the original. The source database is never opened for writing — the export is a copy, and its bytes are checked before returning: if any original value survives in any text column or evidence blob, the export fails instead of shipping.
 
 ## Queueing scans
 
