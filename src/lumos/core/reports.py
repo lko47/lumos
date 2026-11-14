@@ -801,6 +801,8 @@ def build_html_report(database_path: str | Path) -> str:
         )
         for link in payload["links"]
     )
+    host_table_rows = "".join(rows) or '<tr><td colspan="4">no hosts</td></tr>'
+    link_table_rows = links or '<tr><td colspan="4">no links</td></tr>'
     notes = "".join(
         "<li><strong>{}</strong>: {}</li>".format(
             html.escape(note["target_id"] or note["target_kind"]), html.escape(note["body"])
@@ -826,10 +828,10 @@ th {{ background: #eee; }}
 {len(payload["scans"])} scan(s). Inferred links are labelled, never presented as measured.</p>
 <h2>Hosts</h2>
 <table><thead><tr><th>address</th><th>hostname</th><th>OS</th><th>ports</th></tr></thead>
-<tbody>{"".join(rows) or "<tr><td colspan=\"4\">no hosts</td></tr>"}</tbody></table>
+<tbody>{host_table_rows}</tbody></table>
 <h2>Links</h2>
 <table><thead><tr><th>from</th><th>to</th><th>evidence</th><th>confidence</th></tr></thead>
-<tbody>{links or "<tr><td colspan=\"4\">no links</td></tr>"}</tbody></table>
+<tbody>{link_table_rows}</tbody></table>
 <h2>Notes</h2>
 <ul>{notes or "<li>none</li>"}</ul>
 </body>
