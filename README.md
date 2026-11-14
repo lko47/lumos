@@ -2,6 +2,8 @@
 
 [![Tests](https://github.com/lko47/lumos/actions/workflows/tests.yml/badge.svg)](https://github.com/lko47/lumos/actions/workflows/tests.yml)
 
+![The map, collapsed to hops](docs/screenshots/map.svg)
+
 Lumos is a terminal-first network mapper built on the user's own installed Nmap. It stores scan observations, scope, audit history, review flags, and notes in a portable SQLite engagement file. Use it only for systems and networks you own or are explicitly authorized to assess. Lumos is not affiliated with the Nmap Project and does not bundle Nmap.
 
 The project name is provisional. No game assets, names, or layouts are used.
@@ -249,6 +251,17 @@ measured; `lumos report svg DATABASE OUT.svg` draws them dotted (three-on/two-of
 for likely, one-on/five-off for weak) while measured and local links stay solid,
 labels hubs with their CIDR and member count, and repeats the caveat in the
 image and its description.
+
+## Screens
+
+![The scans table](docs/screenshots/scans.svg)
+
+Both images are generated, not captured by hand: `scripts/make_screenshot.py`
+writes a demo engagement with `lumos demo`, drives the interface in a
+pseudo-terminal and converts the character grid to SVG. That means the network in
+the pictures cannot be somebody's real network, and the images can be regenerated
+after a layout change instead of drifting from the code. The generator needs
+`pyte` (`pip install pyte`); nothing in the runtime does.
 
 ## What the scanner cannot see
 

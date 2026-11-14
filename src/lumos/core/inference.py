@@ -19,6 +19,7 @@ database produces the same ids.
 
 from __future__ import annotations
 
+import functools
 import ipaddress
 import json
 import sqlite3
@@ -103,6 +104,12 @@ class _Plan:
     hubs: dict[tuple[int, int, int], _Network] = field(default_factory=dict)
     memberships: list[tuple[str, str]] = field(default_factory=list)  # (zone_id, node_id)
     hops: set[str] = field(default_factory=set)  # placeholder node ids this pass still needs
+
+
+@functools.lru_cache(maxsize=8192)
+def _cidr_text(version: int, prefixlen: int, network_int: int) -> str:
+    """Render a network CIDR once per distinct network, not once per host."""
+    return str(ipaddress.ip_network(f"{ipaddress.ip_address(network_int)}/{prefixlen}", strict=False))
 
 
 def _mask(version: int, prefixlen: int) -> int:
@@ -430,7 +437,7 @@ def _plan_vantage(
         network_int = address_int & _mask(version, prefixlen)
         network = _Network(
             key=(version, prefixlen, network_int),
-            cidr=str(ipaddress.ip_network(f"{ipaddress.ip_address(address_int)}/{prefixlen}", strict=False)),
+            cidr=_cidr_text(version, prefixlen, network_int),
             version=version,
             prefixlen=prefixlen,
             network=network_int,
@@ -706,6 +713,7 @@ def _rebuild(conn: sqlite3.Connection, *, now: str | None = None) -> RebuildStat
     # Apply user decisions: rejected links never come back, promoted ones were
     # materialised as manual edges when the user made the decision.
     kept_edges: set[str] = set()
+    edge_rows: list[tuple] = []
     for from_node, to_node, edge_type, confidence, evidence in plan.edges:
         rule = str(evidence["rule"])
         edge_id = (
@@ -718,12 +726,7 @@ def _rebuild(conn: sqlite3.Connection, *, now: str | None = None) -> RebuildStat
         if decisions.get(edge_id) == "promoted":
             continue
         kept_edges.add(edge_id)
-        conn.execute(
-            "INSERT INTO topology_edges(id, engagement_id, from_node_id, to_node_id, edge_type, source_kind, "
-            "source_id, confidence, first_observed_at, last_confirmed_at, derived, evidence_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?) "
-            "ON CONFLICT(id) DO UPDATE SET confidence = excluded.confidence, "
-            "last_confirmed_at = excluded.last_confirmed_at, evidence_json = excluded.evidence_json",
+        edge_rows.append(
             (
                 edge_id,
                 engagement_id,
@@ -736,16 +739,16 @@ def _rebuild(conn: sqlite3.Connection, *, now: str | None = None) -> RebuildStat
                 stamp,
                 stamp,
                 json.dumps(evidence, ensure_ascii=False, sort_keys=True),
-            ),
+            )
         )
-    removed_edges = _prune(conn, "topology_edges", engagement_id, kept_edges, "derived = 1")
+    removed_edges = _write_edges(conn, engagement_id, kept_edges, edge_rows)
 
     kept_hubs = {hub.zone_id for hub in plan.hubs.values()}
-    for zone_id, node_id in plan.memberships:
-        conn.execute(
+    if plan.memberships:
+        conn.executemany(
             "INSERT INTO zone_memberships(zone_id, topology_node_id, author, created_at) "
             "VALUES (?, ?, 'lumos', ?) ON CONFLICT DO NOTHING",
-            (zone_id, node_id, stamp),
+            [(zone_id, node_id, stamp) for zone_id, node_id in plan.memberships],
         )
     if kept_hubs:
         placeholders = ",".join("?" for _ in kept_hubs)
@@ -771,6 +774,51 @@ def _rebuild(conn: sqlite3.Connection, *, now: str | None = None) -> RebuildStat
             ).fetchone()
         ),
     )
+
+
+def _write_edges(
+    conn: sqlite3.Connection,
+    engagement_id: str,
+    kept_edges: set[str],
+    edge_rows: list[tuple],
+) -> int:
+    """Replace every derived edge in one pass and report what disappeared.
+
+    Derived edges are rebuilt from nothing each time, so this deletes them in one
+    statement and inserts in bulk. Row-by-row upserts over a hundred thousand
+    edges dominated the rebuild; two rules can describe the same claim, so rows
+    are collapsed onto the unique key first and keep the earliest observation.
+    """
+    existing = {
+        str(row[0]): str(row[1] or "")
+        for row in conn.execute(
+            "SELECT id, first_observed_at FROM topology_edges"
+            " WHERE engagement_id = ? AND derived = 1",
+            (engagement_id,),
+        )
+    }
+    removed = len(set(existing) - kept_edges)
+    unique_rows: dict[tuple, tuple] = {}
+    for row in edge_rows:
+        key = (row[2], row[3], row[4], row[5])
+        first_seen = existing.get(str(row[0])) or str(row[8])
+        candidate = row[:8] + (first_seen, row[8], row[10])
+        current = unique_rows.get(key)
+        if current is None or candidate[8] < current[8]:
+            unique_rows[key] = candidate
+    if existing:
+        conn.execute(
+            "DELETE FROM topology_edges WHERE engagement_id = ? AND derived = 1",
+            (engagement_id,),
+        )
+    if unique_rows:
+        conn.executemany(
+            "INSERT INTO topology_edges(id, engagement_id, from_node_id, to_node_id, edge_type, source_kind, "
+            "source_id, confidence, first_observed_at, last_confirmed_at, derived, evidence_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
+            list(unique_rows.values()),
+        )
+    return removed
 
 
 def _prune(conn: sqlite3.Connection, table: str, engagement_id: str, keep: set[str], extra: str) -> int:

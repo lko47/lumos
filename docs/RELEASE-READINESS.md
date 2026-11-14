@@ -52,12 +52,13 @@ scale number is claimed.
 
 | Item | Why |
 | --- | --- |
-| README screenshots | no terminal rasteriser is available in this environment; the demo database that would feed them exists (`lumos demo`) |
+| ~~README screenshots~~ | **done**: `docs/screenshots/map.svg` and `scans.svg`, generated from demo data by `scripts/make_screenshot.py` driving the interface in a PTY |
 | ~~Large-engagement scale test~~ | **measured**: `docs/BENCHMARKS.md` has 10,000 and 100,000-host runs from `bench/map_benchmark.py` (frame 16.9 ms and `rebuild_inferred` 18 s at 100k) |
 | Privilege elevation | `-sS`/`-sU` require Lumos itself to hold the capability; there is no setuid or polkit helper, by design |
 | Windows support | terminal interface targets POSIX; not attempted |
 | NSE script browser | script output is stored and displayed, but there is no per-script explorer |
-| Real masscan/naabu/rustscan runs | their parsers replay recorded fixtures only; no real binary has ever been run through Lumos |
+| GitHub metadata | description, topics and a Release for `v0.2.0` need an authenticated write; `scripts/github_metadata.py` performs them once a token is supplied |
+| Real masscan runs | masscan needs raw-socket privileges (`CAP_NET_RAW`); no unprivileged run is possible, so its parser is still fixture-only. naabu and rustscan *have* now been run against the real binaries on loopback (see `tests/test_real_engines.py`) |
 | Git history object purge | old revisions are unreachable by ref, but only a repository reset or a GitHub support request removes them from the server's cache |
 
 ## Refusals worth knowing

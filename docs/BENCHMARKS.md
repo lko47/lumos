@@ -40,8 +40,8 @@ above, Python 3.14.9.
 
 | Hosts | Database | Load (default bound) | Load (all nodes) | Frame at 110x32 | `rebuild_inferred` |
 | --- | --- | --- | --- | --- | --- |
-| 10,000 | 31.8 MB | 29.3 ms | 24 ms | 3.4 ms | 1.20 s |
-| 100,000 | 315 MB | 460 ms | 436 ms | 16.9 ms | 18.0 s |
+| 10,000 | 31.7 MB | 24.8 ms | 29 ms | 4.0 ms | 0.92 s |
+| 100,000 | 315 MB | 499 ms | 521 ms | 18.9 ms | 14.1 s |
 
 Read this with the shape of the tool in mind:
 
@@ -49,8 +49,10 @@ Read this with the shape of the tool in mind:
   16.9 ms against the 50 ms budget; the default 2,000-node viewport is what an
   operator actually sees, and it loads in under half a second.
 - **`rebuild_inferred` is the expensive path**, and it runs synchronously on the
-  calling thread after a scan or an import: 18 s at 100,000 hosts. That is a real
+  calling thread after a scan or an import: 14 s at 100,000 hosts. That is a real
   limitation, now measured rather than assumed. It is not done on every frame,
   but it does block the caller, and nothing in this repository claims otherwise.
+  It was 18 s before derived edges were written in one bulk statement instead of
+  a per-row upsert; the remaining cost is index maintenance on 100,000 rows.
 - The benchmark builds its fixture with bulk SQL, so the numbers describe
   reading and inference, not the Nmap writer's per-host path.
