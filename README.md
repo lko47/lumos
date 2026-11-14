@@ -200,6 +200,12 @@ A queued job is an intention, not a measurement, so it lives in `<database>.queu
 
 A failure stops the run and keeps the rest of the queue: the next job may have been queued *because* of what the failed one would have found.
 
+## History hygiene
+
+`tests/test_repo_hygiene.py` fails the suite on personal data in the files on disk; `python3 scripts/check_history_pii.py` walks **every revision, every commit message and every author identity**, because a file sanitised today can still be reachable through an earlier commit. It is run by the test suite and belongs in a pre-release pass.
+
+The history has been rewritten once for this reason (`git filter-repo`, force-push, tag re-pointed): real subnets became documentation ranges, `/home/<user>` paths became `/home/user`, a host label became `scanner-host`, and the author identity became a GitHub noreply address. Old commits that GitHub still holds are no longer referenced by any branch or tag.
+
 ## Development status and project hygiene
 
 Phase 1 established the merge-ready schema, migration entry point, database validation, synthetic Nmap XML fixtures, and an offline fake Nmap executable. Phase 2 adds the headless scan/import/report path. CI and unit tests do not run scans or require network access. Python 3.10 and a real Nmap scan have not yet been verified in this environment.
